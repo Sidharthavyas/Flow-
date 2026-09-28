@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { aiRoast, aiRoastEnabled } from "@/lib/ai-roast";
 import { requireApiUser } from "@/lib/auth";
 import { budgetNudge, dayStatuses } from "@/lib/budget-nudge";
 import { dbConnect } from "@/lib/db";
@@ -8,6 +9,7 @@ import { paiseToRupees } from "@/lib/money";
 import { serializeExpense } from "@/lib/serializers";
 import { Budget } from "@/models/Budget";
 import { Expense } from "@/models/Expense";
+import { RoastCache } from "@/models/RoastCache";
 
 export const runtime = "nodejs";
 
@@ -52,8 +54,30 @@ export async function GET(request: NextRequest) {
       name: user.name, topCategory, seed: slot === "afternoon" ? `${user.id}:afternoon` : user.id, now,
     });
 
+    // With an AI provider configured, the roast is written fresh from today's numbers — once per day and
+    // situation, cached so the app (slot "app") and the 9 PM notification ("evening") show the same line.
+    let body = nudge?.line ?? "";
+    if (nudge?.tone === "roast" && aiRoastEnabled()) {
+      const key = `${keyOf(now)}|${slot === "afternoon" ? "afternoon" : "main"}|${nudge.level}|${nudge.label.split(" · ")[0]}`;
+      const cached = await RoastCache.findOne({ userId: user.id, key }).select("line").lean();
+      if (cached) body = String(cached.line);
+      else {
+        const todaySpent = forecast.isCurrent ? forecast.spentToday : 0;
+        const line = await aiRoast({
+          level: nudge.level, situation: nudge.label, period, budget: `₹${budget}`, spentSoFar: `₹${Math.round(forecast.spent)}`,
+          forecastByPeriodEnd: `₹${Math.round(forecast.forecast)}`, spentToday: `₹${Math.round(todaySpent)}`,
+          biggestCategory: topCategory ? `${topCategory} (₹${Math.round(byCategory.get(topCategory) ?? 0)})` : undefined,
+          daysLeft: forecast.dayCount - forecast.elapsed, timeOfDay: slot === "afternoon" ? "afternoon" : "evening",
+        });
+        if (line) {
+          body = line;
+          await RoastCache.updateOne({ userId: user.id, key }, { line, expiresAt: new Date(Date.now() + 2 * 86_400_000) }, { upsert: true }).catch(() => undefined);
+        }
+      }
+    }
+
     return NextResponse.json(
-      nudge ? { show: true, tone: nudge.tone, title: `${nudge.tone === "roast" ? "🔥" : "🏆"} ${nudge.label}`, body: nudge.line } : quiet,
+      nudge ? { show: true, tone: nudge.tone, level: nudge.level, title: `${nudge.tone === "roast" ? "🔥" : "🏆"} ${nudge.label}`, body } : quiet,
       { headers: { "Cache-Control": "private, no-store" } },
     );
   } catch (e) {

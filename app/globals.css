@@ -59,3 +59,27 @@
 @keyframes roastShake{0%,100%{transform:none}20%{transform:translateX(-8px) rotate(-1deg)}40%{transform:translateX(7px) rotate(1deg)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
 @keyframes stampIn{from{opacity:0;transform:rotate(9deg) scale(2.2)}to{opacity:.8;transform:rotate(9deg) scale(1)}}
 @media(prefers-reduced-motion:reduce){.roast-takeover,.roast-burst,.roast-line,.nudge-stamp{animation:none}}
+/* Roast intensity levels: mild (orange, cheeky) · hot (red) · inferno (black-red, savage) */
+.roast-takeover.mild{background:radial-gradient(120% 85% at 50% 0%,#ffc07a 0%,#f39a45 42%,#c8641d 100%)}.roast-takeover.mild .roast-primary{color:#b25716}
+.roast-takeover.inferno{background:radial-gradient(90% 60% at 50% 100%,rgba(255,86,40,.55) 0%,rgba(255,86,40,0) 70%),radial-gradient(120% 90% at 50% 0%,#5a0f0b 0%,#2a0705 55%,#120202 100%)}
+.roast-takeover.inferno .roast-primary{color:#5a0f0b}.roast-takeover.inferno .roast-chip{background:rgba(255,86,40,.22);color:#ffd2c4}
+.roast-takeover.inferno .roast-burst{animation:roastBurn 1.1s ease-in-out infinite,infernoGlow 1.1s ease-in-out infinite}
+.roast-takeover.inferno .roast-line{text-shadow:0 0 24px rgba(255,86,40,.45)}
+.roast-takeover.inferno:after{content:"";position:fixed;left:0;right:0;bottom:0;height:34vh;pointer-events:none;background:linear-gradient(0deg,rgba(255,110,40,.28),transparent);animation:infernoFlicker 1.8s ease-in-out infinite}
+@keyframes infernoGlow{0%,100%{filter:drop-shadow(0 0 18px rgba(255,86,40,.55))}50%{filter:drop-shadow(0 0 34px rgba(255,140,40,.9))}}
+@keyframes infernoFlicker{0%,100%{opacity:.7}40%{opacity:1}70%{opacity:.55}}
+.nudge.roast.mild{background:var(--accent-soft);color:#7a4312;border-color:rgba(238,160,90,.4);box-shadow:0 14px 34px rgba(238,160,90,.16)}.nudge.roast.mild small{color:var(--accent-strong)}.nudge.roast.mild .nudge-stamp{border-color:var(--accent-strong);color:var(--accent-strong)}
+.nudge.roast.inferno{background:linear-gradient(135deg,#2a0705,#5a0f0b);color:#ffe3da;border-color:rgba(255,86,40,.45);box-shadow:0 16px 38px rgba(90,15,11,.35)}.nudge.roast.inferno small{color:#ff8f6b}.nudge.roast.inferno .nudge-stamp{border-color:#ff8f6b;color:#ff8f6b}.nudge.roast.inferno>span{background:rgba(255,255,255,.1)}
+/* Roast for a single just-added expense */
+.expense-roast{position:fixed;z-index:95;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));width:min(calc(100% - 24px),440px);transform:translateX(-50%);padding:16px 16px 14px;border-radius:24px;color:#fff;background:linear-gradient(135deg,#f04f45,#b3261e);box-shadow:0 22px 50px rgba(120,20,15,.35);animation:popUp .45s cubic-bezier(.2,1.3,.4,1) both}
+.expense-roast.mild{background:linear-gradient(135deg,#f6a24f,#d06a1f);box-shadow:0 22px 50px rgba(160,80,20,.3)}.expense-roast.inferno{background:linear-gradient(135deg,#3a0906,#1a0303);border:1px solid rgba(255,86,40,.45);box-shadow:0 22px 50px rgba(40,0,0,.5),0 0 30px rgba(255,86,40,.25)}
+.expense-roast-head{display:flex;align-items:center;gap:9px}.expense-roast-head>span{font-size:22px;animation:roastBurn 1.4s ease-in-out infinite}.expense-roast-head small{flex:1;font-size:11.5px;font-weight:780;opacity:.9;letter-spacing:.01em}
+.expense-roast-head button{width:30px;height:30px;border:0;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;font-size:18px;line-height:1}
+.expense-roast p{margin:10px 0 12px;font-size:19px;font-weight:800;line-height:1.25;letter-spacing:-.025em;animation:roastShake .5s .2s both}
+.expense-roast-cooking{opacity:.85;animation:none!important}.expense-roast-cooking i{font-style:normal;animation:cookDot 1.2s infinite}.expense-roast-cooking i:nth-child(2){animation-delay:.2s}.expense-roast-cooking i:nth-child(3){animation-delay:.4s}
+.expense-roast-actions{display:flex;gap:8px}.expense-roast-actions button{height:40px;padding:0 14px;border-radius:14px;border:1.5px solid rgba(255,255,255,.5);background:transparent;color:#fff;font-weight:720;font-size:13px}.expense-roast-actions button:first-child{flex:1;border:0;background:#fff;color:#a3221b}
+.expense-roast.mild .expense-roast-actions button:first-child{color:#b25716}.expense-roast.inferno .expense-roast-actions button:first-child{color:#5a0f0b}
+@keyframes popUp{from{opacity:0;transform:translate(-50%,40px) scale(.94)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
+@keyframes cookDot{0%,100%{opacity:.2}50%{opacity:1}}
+@media(min-width:1024px){.expense-roast{bottom:28px}}
+@media(prefers-reduced-motion:reduce){.roast-takeover.inferno .roast-burst,.roast-takeover.inferno:after,.expense-roast,.expense-roast p,.expense-roast-head>span{animation:none}}

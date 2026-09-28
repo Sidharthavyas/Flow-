@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeForecast, expenseInsights, investmentInsights, paceStatusLabel, previousPeriodStart, savingsInsights, type Forecast, type Insight } from "@/lib/insights";
 import { budgetNudge, type BudgetNudge as Nudge } from "@/lib/budget-nudge";
+import { expenseRoast, typicalSpend, type ExpenseRoast } from "@/lib/expense-roast";
 
 type Period = "week" | "month";
 type Page = "expenses" | "money";
@@ -43,6 +44,7 @@ const PAYMENT_METHODS = ["UPI", "Cash", "Credit Card", "Debit Card", "Bank Trans
 const SAVING_METHODS = ["Bank Transfer", "UPI", "IMPS", "NEFT", "RTGS", "Auto Transfer", "Cash Deposit", "Cash Withdrawal", "Other"];
 const PAGE_SIZE = 5;
 const ROAST_SEEN_KEY = "flow-roast-seen";
+const ROAST_EMOJI = { mild: "😬", hot: "🔥", inferno: "💀" } as const;
 
 const EMPTY_EXPENSE: ExpenseDraft = { amount: 0, category: "", date: "", name: "", payment: "", type: "", recurring: "", extra: "" };
 const EMPTY_INVESTMENT: InvestmentDraft = { name: "", type: "", invested: 0, current: 0, date: "", frequency: "", rate: null, platform: "", maturity: "", note: "" };
@@ -324,15 +326,48 @@ export default function FlowDashboard({ user }: { user: User }) {
 
   // Full-screen roast once per day, and again only if the alert escalates (e.g. today's allowance → budget crossed).
   const [seenRoast, setSeenRoast] = useState(() => { try { return window.localStorage.getItem(ROAST_SEEN_KEY) ?? ""; } catch { return ""; } });
-  const roastKey = nudge?.tone === "roast" ? `${localDateKey()}|${nudge.label.split(" · ")[0]}` : "";
-  const showRoastTakeover = Boolean(roastKey) && !loadingExpenses && seenRoast !== roastKey;
-  function dismissRoast() {
+  const roastKey = nudge?.tone === "roast" ? `${localDateKey()}|${nudge.label.split(" · ")[0]}|${nudge.level}` : "";
+  // The server may swap in an AI-written line for today (cached, so it matches the 9 PM notification).
+  const [dailyLine, setDailyLine] = useState<{ key: string; line: string | null }>({ key: "", line: null });
+  useEffect(() => {
+    if (!roastKey || loadingExpenses) return;
+    let cancelled = false;
+    const settle = (line: string | null) => { if (!cancelled) setDailyLine((d) => (d.key === roastKey ? d : { key: roastKey, line })); };
+    const timer = setTimeout(() => settle(null), 5000);
+    api<{ show?: boolean; tone?: string; body?: string }>(`/api/nudge?date=${localDateKey()}&slot=app`)
+      .then((r) => settle(r.show && r.tone === "roast" && r.body ? r.body : null))
+      .catch(() => settle(null))
+      .finally(() => clearTimeout(timer));
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [roastKey, loadingExpenses]);
+  const dailyReady = dailyLine.key === roastKey;
+  const shownNudge = nudge && dailyReady && dailyLine.line ? { ...nudge, line: dailyLine.line } : nudge;
+  const [expensePop, setExpensePop] = useState<(ExpenseRoast & { id: number; ready: boolean }) | null>(null);
+  const showRoastTakeover = Boolean(roastKey) && !loadingExpenses && dailyReady && !expensePop && seenRoast !== roastKey;
+  function markRoastSeen() {
     setSeenRoast(roastKey);
     try { window.localStorage.setItem(ROAST_SEEN_KEY, roastKey); } catch { /* private mode: it just shows again next launch */ }
   }
-  async function shareRoast() {
-    if (!nudge) return;
-    const text = `“${nudge.line}”\n— Flow roasted me today 🔥`;
+  function dismissRoast() { markRoastSeen(); }
+  function closeExpensePop() {
+    // The expense roast already made the point; don't stack the daily takeover right after it.
+    setExpensePop(null); markRoastSeen();
+  }
+  const expensePopId = useRef(0);
+  function showExpenseRoast(roast: ExpenseRoast, spentAfter: number) {
+    const id = ++expensePopId.current;
+    setExpensePop({ ...roast, id, ready: false });
+    const finish = (line: string | null) => setExpensePop((p) => (p && p.id === id && !p.ready ? { ...p, line: line || p.line, ready: true } : p));
+    const timer = setTimeout(() => finish(null), 4500);
+    api<{ line: string | null }>("/api/roast", { method: "POST", body: JSON.stringify({
+      level: roast.level, situation: roast.title, amount: expenseDraft.amount, category: expenseDraft.category,
+      description: expenseDraft.name || undefined, typicalSpend: Number(roast.vars.typical.replace(/[^\d]/g, "")) || undefined,
+      budget: budget || undefined, spentAfter, time: roast.vars.time,
+    }) }).then((r) => finish(r.line)).catch(() => finish(null)).finally(() => clearTimeout(timer));
+  }
+  async function shareRoast(line = shownNudge?.line) {
+    if (!line) return;
+    const text = `“${line}”\n— Flow roasted me today 🔥`;
     try {
       if (navigator.share) { await navigator.share({ text }); return; }
       await navigator.clipboard.writeText(text); notify("Roast copied — ab doston ko bhej");
@@ -405,8 +440,16 @@ export default function FlowDashboard({ user }: { user: User }) {
     try {
       const url = editingExpenseId ? `/api/expenses/${editingExpenseId}` : "/api/expenses";
       const method = editingExpenseId ? "PATCH" : "POST";
+      // Judge a new expense against the numbers as they were just before it.
+      const inCurrentPeriod = forecast.isCurrent && expenseDraft.date >= startKey && expenseDraft.date < endKey;
+      const roast = editingExpenseId ? null : expenseRoast({
+        expense: expenseDraft, budget, spentBefore: forecast.spent, leftTodayBefore: forecast.leftToday, inCurrentPeriod,
+        isToday: expenseDraft.date === localDateKey(), typical: typicalSpend([...expenses, ...prevExpenses]),
+      });
       await api(url, { method, body: JSON.stringify(expenseDraft) });
-      await loadExpenses(); setSheet(null); notify(editingExpenseId ? "Expense updated" : "Expense added");
+      await loadExpenses(); setSheet(null);
+      if (roast) showExpenseRoast(roast, expenseDraft.amount + (inCurrentPeriod ? forecast.spent : 0));
+      else notify(editingExpenseId ? "Expense updated" : "Expense added");
     } catch (e) { notify(e instanceof Error ? e.message : "Could not save expense"); }
     finally { setBusy(false); }
   }
@@ -529,7 +572,7 @@ export default function FlowDashboard({ user }: { user: User }) {
           </section>
 
           {page === "expenses" ? (
-            <ExpensesView loading={loadingExpenses} budget={budget} pace={pace} forecast={forecast} smartInsights={smartExpenseInsights} nudge={nudge} insight={expenseInsight} expenses={expenses} categories={categories}
+            <ExpensesView loading={loadingExpenses} budget={budget} pace={pace} forecast={forecast} smartInsights={smartExpenseInsights} nudge={shownNudge} insight={expenseInsight} expenses={expenses} categories={categories}
               filteredExpenses={filteredExpenses} pagedExpenses={pagedExpenses} selectedDay={selectedDay} period={period} anchor={anchor} start={start}
               setSheet={setSheet} setBudgetDraft={setBudgetDraft} onEdit={editExpense} onSelectDay={(day) => { setSelectedDay(day); setSheet("day"); }}
               categoryFilter={categoryFilter} onCategory={(cat) => { setCategoryFilter(cat); setSelectedDay(""); setRangeFilter(null); }}
@@ -561,7 +604,8 @@ export default function FlowDashboard({ user }: { user: User }) {
         {sheet === "day" && <DaySheet day={selectedDay} days={pace.days} expenses={expenses} budget={budget} onView={() => setSheet(null)} />}
         {sheet === "profile" && <ProfileSheet user={user} busy={busy} onSignOut={signOut} />}
       </Sheet>}
-      {showRoastTakeover && nudge && <RoastTakeover nudge={nudge} spent={forecast.spent} budget={budget} forecast={forecast.forecast} onClose={dismissRoast} onShare={() => void shareRoast()} />}
+      {expensePop && <ExpenseRoastPop roast={expensePop} onClose={closeExpensePop} onShare={() => void shareRoast(expensePop.line)} />}
+      {showRoastTakeover && shownNudge && <RoastTakeover nudge={shownNudge} spent={forecast.spent} budget={budget} forecast={forecast.forecast} onClose={dismissRoast} onShare={() => void shareRoast()} />}
       <div className={`toast ${toast ? "show" : ""}`} role="status">{toast}</div>
     </div>
   );
@@ -730,7 +774,15 @@ function ActivityChart({ expenses, period, start, budget, dayCount, todayIndex, 
 }
 
 function NudgeCard({ nudge }: { nudge: Nudge }) {
-  return <div className={`nudge ${nudge.tone}`} role="status">{nudge.tone === "roast" && <b className="nudge-stamp" aria-hidden="true">ROASTED</b>}<span>{nudge.tone === "roast" ? "🔥" : "🏆"}</span><div><small>{nudge.label}</small><p>{nudge.line}</p></div></div>;
+  return <div className={`nudge ${nudge.tone} ${nudge.level ?? ""}`} role="status">{nudge.tone === "roast" && <b className="nudge-stamp" aria-hidden="true">{nudge.level === "inferno" ? "COOKED" : "ROASTED"}</b>}<span>{nudge.tone === "roast" ? ROAST_EMOJI[nudge.level ?? "hot"] : "🏆"}</span><div><small>{nudge.label}</small><p>{nudge.line}</p></div></div>;
+}
+
+function ExpenseRoastPop({ roast, onClose, onShare }: { roast: ExpenseRoast & { ready: boolean }; onClose: () => void; onShare: () => void }) {
+  return <div className={`expense-roast ${roast.level}`} role="alertdialog" aria-labelledby="expense-roast-line">
+    <div className="expense-roast-head"><span aria-hidden="true">{ROAST_EMOJI[roast.level]}</span><small>{roast.title}</small><button onClick={onClose} aria-label="Close roast">×</button></div>
+    {roast.ready ? <p id="expense-roast-line">{roast.line}</p> : <p id="expense-roast-line" className="expense-roast-cooking">Flow is cooking a roast<i>.</i><i>.</i><i>.</i></p>}
+    <div className="expense-roast-actions"><button onClick={onClose}>Haan yaar, galti ho gayi</button>{roast.ready && <button onClick={onShare}>Share</button>}</div>
+  </div>;
 }
 
 function RoastTakeover({ nudge, spent, budget, forecast, onClose, onShare }: { nudge: Nudge; spent: number; budget: number; forecast: number; onClose: () => void; onShare: () => void }) {
@@ -739,8 +791,8 @@ function RoastTakeover({ nudge, spent, budget, forecast, onClose, onShare }: { n
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return <div className="roast-takeover" role="dialog" aria-modal="true" aria-labelledby="roast-line">
-    <div className="roast-burst" aria-hidden="true">🔥</div>
+  return <div className={`roast-takeover ${nudge.level ?? "hot"}`} role="dialog" aria-modal="true" aria-labelledby="roast-line">
+    <div className="roast-burst" aria-hidden="true">{ROAST_EMOJI[nudge.level ?? "hot"]}</div>
     <span className="roast-chip">{nudge.label}</span>
     <p id="roast-line" className="roast-line">{nudge.line}</p>
     <div className="roast-stats">
