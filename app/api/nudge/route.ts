@@ -11,13 +11,17 @@ import { Expense } from "@/models/Expense";
 
 export const runtime = "nodejs";
 
-// Today's roast or praise for the phone's daily notification. The phone sends its own local date
-// (?date=YYYY-MM-DD) so the server's timezone never shifts which day is "today".
+// Today's roast or praise for the phone's notifications. The phone sends its own local date
+// (?date=YYYY-MM-DD) so the server's timezone never shifts which day is "today", and a slot:
+// "afternoon" / "evening" get different lines on the same day; "test" always answers so setup can be verified.
+const TEST_MESSAGE = { show: true, tone: "test", title: "🔔 Flow notifications are on", body: "Aaj budget safe hai, toh roast nahi. Overspend kiya toh 1 PM aur 9 PM pe Flow bolega. 👀" };
 export async function GET(request: NextRequest) {
   try {
     const user = await requireApiUser();
     const dateParam = request.nextUrl.searchParams.get("date") ?? "";
-    const now = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? new Date(`${dateParam}T20:00:00`) : new Date();
+    const slot = request.nextUrl.searchParams.get("slot") ?? "evening";
+    const now = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? new Date(`${dateParam}T${slot === "afternoon" ? "13" : "20"}:00:00`) : new Date();
+    const quiet = slot === "test" ? TEST_MESSAGE : { show: false };
     if (Number.isNaN(now.getTime())) return jsonError("Invalid date");
 
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -28,7 +32,7 @@ export async function GET(request: NextRequest) {
       { periodType: "week", periodStart: keyOf(weekStart) },
     ] }).lean();
     const chosen = budgets.find((b) => b.periodType === "month") ?? budgets.find((b) => b.periodType === "week");
-    if (!chosen) return NextResponse.json({ show: false }, { headers: { "Cache-Control": "private, no-store" } });
+    if (!chosen) return NextResponse.json(quiet, { headers: { "Cache-Control": "private, no-store" } });
 
     const period = chosen.periodType as Period, budget = paiseToRupees(Number(chosen.amountPaise));
     const start = period === "month" ? monthStart : weekStart;
@@ -45,11 +49,11 @@ export async function GET(request: NextRequest) {
     const topCategory = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
     const nudge = budgetNudge({
       forecast, budget, days: dayStatuses(expenses, budget, start, forecast.dayCount), hasExpenses: expenses.length > 0,
-      name: user.name, topCategory, seed: user.id, now,
+      name: user.name, topCategory, seed: slot === "afternoon" ? `${user.id}:afternoon` : user.id, now,
     });
 
     return NextResponse.json(
-      nudge ? { show: true, tone: nudge.tone, title: `${nudge.tone === "roast" ? "🔥" : "🏆"} ${nudge.label}`, body: nudge.line } : { show: false },
+      nudge ? { show: true, tone: nudge.tone, title: `${nudge.tone === "roast" ? "🔥" : "🏆"} ${nudge.label}`, body: nudge.line } : quiet,
       { headers: { "Cache-Control": "private, no-store" } },
     );
   } catch (e) {
