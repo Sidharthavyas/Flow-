@@ -1,8 +1,8 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { budgetStreak, computeForecast, expenseInsights, investmentInsights, paceStatusLabel, previousPeriodStart, savingsInsights, type Forecast, type Insight } from "@/lib/insights";
-import { BUDGET_PRAISE, BUDGET_ROASTS, dailyNudge } from "@/lib/nudges";
+import { computeForecast, expenseInsights, investmentInsights, paceStatusLabel, previousPeriodStart, savingsInsights, type Forecast, type Insight } from "@/lib/insights";
+import { budgetNudge, type BudgetNudge as Nudge } from "@/lib/budget-nudge";
 
 type Period = "week" | "month";
 type Page = "expenses" | "money";
@@ -27,8 +27,6 @@ type PaceSummary = {
   days: DayInfo[]; spent: number; remaining: number; expected: number; delta: number; recorded: DayInfo[];
   good: number; daily: number; projection: number; dayCount: number; isCurrent: boolean;
 };
-
-type Nudge = { tone: "roast" | "praise"; label: string; line: string };
 
 type ExpenseDraft = Omit<Expense, "id">;
 type InvestmentDraft = Omit<Investment, "id">;
@@ -319,19 +317,9 @@ export default function FlowDashboard({ user }: { user: User }) {
   const smartSavingsInsights = useMemo(() => savingsInsights({ savings, totalSavings, saved: savingStats.saved, used: savingStats.used, periodSpent: forecast.spent, monthlySpend, period }), [savings, totalSavings, savingStats, forecast.spent, monthlySpend, period]);
   const smartInvestmentInsights = useMemo(() => investmentInsights({ investments }), [investments]);
 
-  const nudge = useMemo<Nudge | null>(() => {
-    if (!budget || !forecast.isCurrent || !expenses.length) return null;
-    const vars = { name: user.name.trim().split(/\s+/)[0] || "Boss", top: categories[0]?.[0] || "shopping", streak: "", over: "" };
-    let label = "";
-    if (forecast.status === "over") { label = `Budget crossed · ${money(forecast.spent - budget)} over`; vars.over = money(forecast.spent - budget); }
-    else if (forecast.forecast > budget) { label = `At this pace · ${money(forecast.forecast - budget)} over by period end`; vars.over = money(forecast.forecast - budget); }
-    else if (forecast.leftToday < 0) { label = `Today's allowance crossed · ${money(-forecast.leftToday)} over`; vars.over = money(-forecast.leftToday); }
-    if (label) return { tone: "roast", label, line: dailyNudge(BUDGET_ROASTS, user.id, vars) };
-    const streak = budgetStreak(pace.days, forecast.todayIndex);
-    if (streak < 3) return null;
-    vars.streak = String(streak);
-    return { tone: "praise", label: `${streak}-day streak within allowance`, line: dailyNudge(BUDGET_PRAISE, user.id, vars) };
-  }, [budget, forecast, expenses.length, user.name, user.id, categories, pace.days]);
+  const nudge = useMemo<Nudge | null>(() => budgetNudge({
+    forecast, budget, days: pace.days, hasExpenses: expenses.length > 0, name: user.name, topCategory: categories[0]?.[0] ?? "", seed: user.id,
+  }), [budget, forecast, expenses.length, user.name, user.id, categories, pace.days]);
 
   const filteredSavings = useMemo(() => {
     const query = savingSearch.trim().toLowerCase();
