@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { aiRoast } from "@/lib/ai-roast";
 import { requireApiUser } from "@/lib/auth";
+import { dbConnect } from "@/lib/db";
 import { isTrustedOrigin, jsonError } from "@/lib/http";
+import { User } from "@/models/User";
 
 export const runtime = "nodejs";
 
@@ -23,12 +25,14 @@ const roastSchema = z.object({
 export async function POST(request: NextRequest) {
   if (!isTrustedOrigin(request)) return jsonError("Invalid request origin", 403);
   try {
-    await requireApiUser();
+    const user = await requireApiUser();
     const parsed = roastSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid roast request");
+    await dbConnect();
+    const address = String((await User.findById(user.id).select("roastAddress").lean())?.roastAddress ?? "yaar");
     const f = parsed.data, rupees = (v?: number) => (v === undefined ? undefined : `₹${Math.round(v)}`);
     const line = await aiRoast({
-      level: f.level, situation: `Just added an expense — ${f.situation}`, amount: rupees(f.amount), category: f.category,
+      level: f.level, addressAs: address, situation: `Just added an expense — ${f.situation}`, amount: rupees(f.amount), category: f.category,
       description: f.description, typicalSpend: rupees(f.typicalSpend), budget: rupees(f.budget), spentAfterThis: rupees(f.spentAfter), time: f.time,
     });
     return NextResponse.json({ line }, { headers: { "Cache-Control": "private, no-store" } });

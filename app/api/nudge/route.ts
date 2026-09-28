@@ -10,6 +10,7 @@ import { serializeExpense } from "@/lib/serializers";
 import { Budget } from "@/models/Budget";
 import { Expense } from "@/models/Expense";
 import { RoastCache } from "@/models/RoastCache";
+import { User } from "@/models/User";
 
 export const runtime = "nodejs";
 
@@ -46,25 +47,26 @@ export async function GET(request: NextRequest) {
     const expenses = all.filter((e) => e.date >= startKey), prevExpenses = all.filter((e) => e.date < startKey);
 
     const forecast = computeForecast({ expenses, prevExpenses, budget, start, end, period, now });
+    const address = String((await User.findById(user.id).select("roastAddress").lean())?.roastAddress ?? "yaar");
     const byCategory = new Map<string, number>();
     expenses.forEach((e) => byCategory.set(e.category, (byCategory.get(e.category) || 0) + e.amount));
     const topCategory = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
     const nudge = budgetNudge({
       forecast, budget, days: dayStatuses(expenses, budget, start, forecast.dayCount), hasExpenses: expenses.length > 0,
-      name: user.name, topCategory, seed: slot === "afternoon" ? `${user.id}:afternoon` : user.id, now,
+      name: user.name, topCategory, seed: slot === "afternoon" ? `${user.id}:afternoon` : user.id, address, now,
     });
 
     // With an AI provider configured, the roast is written fresh from today's numbers — once per day and
     // situation, cached so the app (slot "app") and the 9 PM notification ("evening") show the same line.
     let body = nudge?.line ?? "";
     if (nudge?.tone === "roast" && aiRoastEnabled()) {
-      const key = `${keyOf(now)}|${slot === "afternoon" ? "afternoon" : "main"}|${nudge.level}|${nudge.label.split(" · ")[0]}`;
+      const key = `${keyOf(now)}|${slot === "afternoon" ? "afternoon" : "main"}|${nudge.level}|${address}|${nudge.label.split(" · ")[0]}`;
       const cached = await RoastCache.findOne({ userId: user.id, key }).select("line").lean();
       if (cached) body = String(cached.line);
       else {
         const todaySpent = forecast.isCurrent ? forecast.spentToday : 0;
         const line = await aiRoast({
-          level: nudge.level, situation: nudge.label, period, budget: `₹${budget}`, spentSoFar: `₹${Math.round(forecast.spent)}`,
+          level: nudge.level, situation: nudge.label, addressAs: address, period, budget: `₹${budget}`, spentSoFar: `₹${Math.round(forecast.spent)}`,
           forecastByPeriodEnd: `₹${Math.round(forecast.forecast)}`, spentToday: `₹${Math.round(todaySpent)}`,
           biggestCategory: topCategory ? `${topCategory} (₹${Math.round(byCategory.get(topCategory) ?? 0)})` : undefined,
           daysLeft: forecast.dayCount - forecast.elapsed, timeOfDay: slot === "afternoon" ? "afternoon" : "evening",

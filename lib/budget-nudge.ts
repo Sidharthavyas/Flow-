@@ -1,6 +1,6 @@
 // Decides whether today deserves a roast or praise. Shared by the dashboard card and the phone notification.
 import { budgetStreak, type Forecast } from "@/lib/insights";
-import { BUDGET_PRAISE, BUDGET_ROASTS, INFERNO_ROASTS, MILD_ROASTS, dailyNudge } from "@/lib/nudges";
+import { BUDGET_PRAISE, BUDGET_ROASTS, INFERNO_ROASTS, MILD_ROASTS, addressVars, dailyNudge } from "@/lib/nudges";
 
 export type RoastLevel = "mild" | "hot" | "inferno";
 export type BudgetNudge = { tone: "roast" | "praise"; level?: RoastLevel; label: string; line: string };
@@ -28,12 +28,12 @@ export function dayStatuses(expenses: { date: string; amount: number }[], budget
   return days;
 }
 
-export function budgetNudge({ forecast, budget, days, hasExpenses, name, topCategory, seed, now = new Date() }: {
+export function budgetNudge({ forecast, budget, days, hasExpenses, name, topCategory, seed, address, now = new Date() }: {
   forecast: Forecast; budget: number; days: { spent: number; status: DayStatus["status"] }[]; hasExpenses: boolean;
-  name: string; topCategory: string; seed: string; now?: Date;
+  name: string; topCategory: string; seed: string; address?: string | null; now?: Date;
 }): BudgetNudge | null {
   if (!budget || !forecast.isCurrent || !hasExpenses) return null;
-  const vars = { name: name.trim().split(/\s+/)[0] || "Boss", top: topCategory || "shopping", streak: "", over: "" };
+  const vars = { name: name.trim().split(/\s+/)[0] || "Boss", top: topCategory || "shopping", streak: "", over: "", ...addressVars(address) };
   let label = "", level: RoastLevel = "hot";
   if (forecast.status === "over") {
     label = `Budget crossed · ${money(forecast.spent - budget)} over`; vars.over = money(forecast.spent - budget);

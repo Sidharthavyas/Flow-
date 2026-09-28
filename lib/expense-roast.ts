@@ -1,6 +1,7 @@
 // Roasts one specific expense right after it's added — only when it actually deserves it.
 import type { RoastLevel } from "@/lib/budget-nudge";
 import { isFixedExpense } from "@/lib/insights";
+import { addressVars } from "@/lib/nudges";
 
 export type ExpenseRoastTrigger = "already-over" | "broke-budget" | "today-limit" | "big-spend" | "late-night";
 export type ExpenseRoast = { level: RoastLevel; trigger: ExpenseRoastTrigger; title: string; line: string; vars: Record<string, string> };
@@ -31,7 +32,7 @@ const TEMPLATES: Record<ExpenseRoastTrigger, string[]> = {
   ],
   "big-spend": [
     "{amount} on {what}? Ye tera usual {typical} ka {x}× hai. Flow has questions.",
-    "{what} — {amount}. Normal din tu {typical} kharchta hai. Aaj kya festival hai?",
+    "{what} — {amount}. Normal din ka kharcha {typical} hota hai. Aaj kya festival hai?",
     "{x}× your usual spend. {what} better be worth it.",
     "{amount} ek hi baar mein. {what} ne tujhe kaise convince kiya?",
     "Ye {amount} wala {what} Flow ke radar pe hai. 👀",
@@ -39,7 +40,7 @@ const TEMPLATES: Record<ExpenseRoastTrigger, string[]> = {
   "late-night": [
     "{time} pe {amount} on {what}? Raat ko dimaag half-price pe chalta hai.",
     "Late-night {what}, {amount}. Kal subah pachhtawa free milega.",
-    "Raat ke {time} baje {what}? Neend sasti thi, bhai.",
+    "Raat ke {time} baje {what}? Neend sasti thi, {bro}.",
     "Night owl mode: {amount} on {what}. Flow bhi jaag raha hai. 👀",
   ],
 };
@@ -64,9 +65,9 @@ export function typicalSpend(expenses: { amount: number; category: string; date:
   return median(expenses.filter((e) => !isFixedExpense(e)).map((e) => e.amount));
 }
 
-export function expenseRoast({ expense, budget, spentBefore, leftTodayBefore, inCurrentPeriod, isToday, typical, now = new Date() }: {
+export function expenseRoast({ expense, budget, spentBefore, leftTodayBefore, inCurrentPeriod, isToday, typical, address, now = new Date() }: {
   expense: { amount: number; category: string; date: string; name: string; type: string; recurring: string };
-  budget: number; spentBefore: number; leftTodayBefore: number; inCurrentPeriod: boolean; isToday: boolean; typical: number; now?: Date;
+  budget: number; spentBefore: number; leftTodayBefore: number; inCurrentPeriod: boolean; isToday: boolean; typical: number; address?: string | null; now?: Date;
 }): ExpenseRoast | null {
   const amount = expense.amount, hour = now.getHours();
   let trigger: ExpenseRoastTrigger | null = null, level: RoastLevel = "hot";
@@ -81,6 +82,7 @@ export function expenseRoast({ expense, budget, spentBefore, leftTodayBefore, in
     amount: money(amount), what: expense.name.trim() || expense.category, category: expense.category,
     typical: money(typical), x: typical ? String(Math.max(2, Math.round(amount / typical))) : "",
     time: new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(now),
+    ...addressVars(address),
   };
   const options = TEMPLATES[trigger];
   let hash = 0;

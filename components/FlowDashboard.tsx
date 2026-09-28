@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { computeForecast, expenseInsights, investmentInsights, paceStatusLabel, previousPeriodStart, savingsInsights, type Forecast, type Insight } from "@/lib/insights";
 import { budgetNudge, type BudgetNudge as Nudge } from "@/lib/budget-nudge";
 import { expenseRoast, typicalSpend, type ExpenseRoast } from "@/lib/expense-roast";
+import { ROAST_ADDRESSES, type RoastAddress } from "@/lib/nudges";
 
 type Period = "week" | "month";
 type Page = "expenses" | "money";
@@ -142,6 +143,7 @@ export default function FlowDashboard({ user }: { user: User }) {
   const [investments, setInvestments] = useState<Investment[]>([]);
   const [savings, setSavings] = useState<Saving[]>([]);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
+  const [roastAddress, setRoastAddress] = useState<RoastAddress>("yaar");
   const [budget, setBudget] = useState(0);
   const [loadingExpenses, setLoadingExpenses] = useState(true);
   const [loadingInvestments, setLoadingInvestments] = useState(true);
@@ -217,13 +219,14 @@ export default function FlowDashboard({ user }: { user: User }) {
     setLoadingInvestments(true); setLoadingSavings(true);
     try {
       const [preferenceResult, investmentResult, savingResult] = await Promise.all([
-        api<{ moneyMode: MoneyMode | null; customExpenseCategories: string[] }>("/api/preferences"),
+        api<{ moneyMode: MoneyMode | null; customExpenseCategories: string[]; roastAddress?: RoastAddress }>("/api/preferences"),
         api<{ investments: Investment[] }>("/api/investments"),
         api<{ savings: Saving[] }>("/api/savings"),
       ]);
       setInvestments(investmentResult.investments);
       setSavings(savingResult.savings);
       setCustomCategories(preferenceResult.customExpenseCategories);
+      if (preferenceResult.roastAddress) setRoastAddress(preferenceResult.roastAddress);
       setMoneyMode(preferenceResult.moneyMode ?? (investmentResult.investments.length ? "investments" : "savings"));
     } catch (e) { notify(e instanceof Error ? e.message : "Could not load your money setup"); }
     finally { setLoadingInvestments(false); setLoadingSavings(false); }
@@ -321,8 +324,8 @@ export default function FlowDashboard({ user }: { user: User }) {
   const smartInvestmentInsights = useMemo(() => investmentInsights({ investments }), [investments]);
 
   const nudge = useMemo<Nudge | null>(() => budgetNudge({
-    forecast, budget, days: pace.days, hasExpenses: expenses.length > 0, name: user.name, topCategory: categories[0]?.[0] ?? "", seed: user.id,
-  }), [budget, forecast, expenses.length, user.name, user.id, categories, pace.days]);
+    forecast, budget, days: pace.days, hasExpenses: expenses.length > 0, name: user.name, topCategory: categories[0]?.[0] ?? "", seed: user.id, address: roastAddress,
+  }), [budget, forecast, expenses.length, user.name, user.id, categories, pace.days, roastAddress]);
 
   // Full-screen roast once per day, and again only if the alert escalates (e.g. today's allowance → budget crossed).
   const [seenRoast, setSeenRoast] = useState(() => { try { return window.localStorage.getItem(ROAST_SEEN_KEY) ?? ""; } catch { return ""; } });
@@ -408,6 +411,12 @@ export default function FlowDashboard({ user }: { user: User }) {
   function editInvestment(investment: Investment) { setEditingInvestmentId(investment.id); setInvestmentDraft({ ...investment }); setSheet("investment"); }
   function editSaving(saving: Saving) { setEditingSavingId(saving.id); setSavingDraft({ ...saving }); setSheet("saving"); }
 
+  async function saveRoastAddress(next: RoastAddress) {
+    if (next === roastAddress) return;
+    const previous = roastAddress; setRoastAddress(next);
+    try { await api("/api/preferences", { method: "PATCH", body: JSON.stringify({ roastAddress: next }) }); notify(next === "yaar" ? "Flow will call you Yaar" : `Flow will call you ${next === "bhai" ? "Bhai" : "Behen"}`); }
+    catch (e) { setRoastAddress(previous); notify(e instanceof Error ? e.message : "Could not save preference"); }
+  }
   async function saveMoneyMode(nextMode: MoneyMode) {
     if (nextMode === moneyMode) return;
     const previous = moneyMode; setMoneyMode(nextMode);
@@ -444,7 +453,7 @@ export default function FlowDashboard({ user }: { user: User }) {
       const inCurrentPeriod = forecast.isCurrent && expenseDraft.date >= startKey && expenseDraft.date < endKey;
       const roast = editingExpenseId ? null : expenseRoast({
         expense: expenseDraft, budget, spentBefore: forecast.spent, leftTodayBefore: forecast.leftToday, inCurrentPeriod,
-        isToday: expenseDraft.date === localDateKey(), typical: typicalSpend([...expenses, ...prevExpenses]),
+        isToday: expenseDraft.date === localDateKey(), typical: typicalSpend([...expenses, ...prevExpenses]), address: roastAddress,
       });
       await api(url, { method, body: JSON.stringify(expenseDraft) });
       await loadExpenses(); setSheet(null);
@@ -602,7 +611,7 @@ export default function FlowDashboard({ user }: { user: User }) {
         {sheet === "saving" && <SavingForm draft={savingDraft} setDraft={setSavingDraft} editing={Boolean(editingSavingId)} busy={busy} onSubmit={saveSaving} onDelete={deleteSaving} accountNames={savingAccountNames} />}
         {sheet === "budget" && <BudgetForm period={period} value={budgetDraft} setValue={setBudgetDraft} busy={busy} onSubmit={saveBudget} />}
         {sheet === "day" && <DaySheet day={selectedDay} days={pace.days} expenses={expenses} budget={budget} onView={() => setSheet(null)} />}
-        {sheet === "profile" && <ProfileSheet user={user} busy={busy} onSignOut={signOut} />}
+        {sheet === "profile" && <ProfileSheet user={user} busy={busy} onSignOut={signOut} roastAddress={roastAddress} onRoastAddress={(value) => void saveRoastAddress(value)} />}
       </Sheet>}
       {expensePop && <ExpenseRoastPop roast={expensePop} onClose={closeExpensePop} onShare={() => void shareRoast(expensePop.line)} />}
       {showRoastTakeover && shownNudge && <RoastTakeover nudge={shownNudge} spent={forecast.spent} budget={budget} forecast={forecast.forecast} onClose={dismissRoast} onShare={() => void shareRoast()} />}
@@ -883,4 +892,4 @@ function InvestmentForm({ draft, setDraft, editing, busy, onSubmit, onDelete }: 
 }
 function BudgetForm({ period, value, setValue, busy, onSubmit }: { period: Period; value: number; setValue: (v: number) => void; busy: boolean; onSubmit: (e: FormEvent) => void }) { return <form onSubmit={onSubmit}><h2>Set budget</h2><p className="sheet-copy">{period === "month" ? "Monthly" : "Weekly"} budget</p><div className="amount-field"><span>₹</span><input autoFocus type="number" min="1" step="1" value={value || ""} onChange={(e) => setValue(Number(e.target.value))} placeholder="0" required /></div><button className="primary-save" disabled={busy}>{busy ? "Saving…" : "Save budget"}</button></form>; }
 function DaySheet({ day, days, expenses, budget, onView }: { day: string; days: DayInfo[]; expenses: Expense[]; budget: number; onView: () => void }) { const info = days.find((d) => d.date === day), count = expenses.filter((e) => e.date === day).length; return <div><h2>{day ? fullDate(day) : "Day"}</h2><div className="day-big">{money(info?.spent || 0)}</div><div className={`status-pill ${info?.status || "none"}`}>{!info?.spent ? "No spending recorded" : !budget ? "Budget not set" : info.status === "good" ? "Below daily allowance" : info.status === "equal" ? "Near daily allowance" : "Over daily allowance"}</div><div className="day-lines"><div><span>Daily allowance</span><strong>{info?.target ? money(info.target) : "—"}</strong></div><div><span>Transactions</span><strong>{count}</strong></div></div><button className="primary-save" onClick={onView}>View expenses</button></div>; }
-function ProfileSheet({ user, busy, onSignOut }: { user: User; busy: boolean; onSignOut: () => void }) { return <div><h2>Account</h2><div className="profile-card"><span className="profile-avatar">{user.name.slice(0, 1).toUpperCase()}</span><div><strong>{user.name}</strong><small>{user.email}</small></div></div><a className="profile-export" href="/api/export">⇩ Export all data as CSV</a><button className="danger-button profile-signout" onClick={onSignOut} disabled={busy}>{busy ? "Signing out…" : "Sign out"}</button></div>; }
+function ProfileSheet({ user, busy, onSignOut, roastAddress, onRoastAddress }: { user: User; busy: boolean; onSignOut: () => void; roastAddress: RoastAddress; onRoastAddress: (value: RoastAddress) => void }) { return <div><h2>Account</h2><div className="profile-card"><span className="profile-avatar">{user.name.slice(0, 1).toUpperCase()}</span><div><strong>{user.name}</strong><small>{user.email}</small></div></div><div className="roast-address"><div><strong>Flow calls you</strong><small>Used in roasts and notifications.</small></div><div className="money-mode-switch" role="radiogroup" aria-label="How Flow addresses you">{ROAST_ADDRESSES.map((value) => <button key={value} role="radio" aria-checked={roastAddress === value} className={roastAddress === value ? "active" : ""} onClick={() => onRoastAddress(value)}>{value === "yaar" ? "Yaar" : value === "bhai" ? "Bhai" : "Behen"}</button>)}</div></div><a className="profile-export" href="/api/export">⇩ Export all data as CSV</a><button className="danger-button profile-signout" onClick={onSignOut} disabled={busy}>{busy ? "Signing out…" : "Sign out"}</button></div>; }

@@ -6,6 +6,7 @@ const UserSchema = new Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     passwordHash: { type: String, required: true, select: false },
     moneyMode: { type: String, enum: ["savings", "investments"], default: undefined },
+    roastAddress: { type: String, enum: ["yaar", "bhai", "behen"], default: undefined },
     customExpenseCategories: {
       type: [{ type: String, trim: true, maxlength: 80 }],
       default: [],

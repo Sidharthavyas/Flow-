@@ -64,7 +64,8 @@ export const savingSchema = z.object({
 export const preferencesSchema = z.object({
   moneyMode: z.enum(["savings", "investments"]).optional(),
   customExpenseCategories: z.array(z.string().trim().min(1).max(80)).max(40).optional(),
-}).refine((data) => data.moneyMode !== undefined || data.customExpenseCategories !== undefined, { message: "No preference changes supplied" });
+  roastAddress: z.enum(["yaar", "bhai", "behen"]).optional(),
+}).refine((data) => data.moneyMode !== undefined || data.customExpenseCategories !== undefined || data.roastAddress !== undefined, { message: "No preference changes supplied" });
 
 export const budgetSchema = z.object({
   periodType: z.enum(["week", "month"]),
