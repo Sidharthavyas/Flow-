@@ -1,6 +1,16 @@
 # Flow — Production Next.js money tracker
 
-A responsive, mobile-first expense and investment tracker built with Next.js App Router, React, MongoDB + Mongoose, Zod validation, and database-backed email/password sessions.
+A responsive, mobile-first expense, savings, and investment tracker built with Next.js App Router, React, MongoDB + Mongoose, Zod validation, and database-backed email/password sessions.
+
+## What Flow tracks
+
+- Expenses with adaptive budget pacing, search, filters, and 5-item pagination.
+- Savings with opening balances, deposits, withdrawals, and neutral account transfers.
+- Investments with allocation and current-vs-invested tracking.
+- User-specific expense categories that are private to each account.
+- A saved Savings / Investments preference that changes the second navigation tab.
+
+For users without investments, the money view defaults to Savings. Existing users who already have investments keep Investments as the fallback until they explicitly choose a preference.
 
 ## Stack
 

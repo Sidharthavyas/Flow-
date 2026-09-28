@@ -28,7 +28,7 @@
     "eslint-config-next": "16.3.0",
     "typescript": "^5.9.2"
   },
-  "description": "A responsive, mobile-first expense and investment tracker built with Next.js App Router, React, MongoDB + Mongoose, Zod validation, and database-backed email/password sessions.",
+  "description": "A responsive, mobile-first expense, savings, and investment tracker built with Next.js App Router, React, MongoDB + Mongoose, Zod validation, and database-backed email/password sessions.",
   "main": "index.js",
   "directories": {
     "lib": "lib"

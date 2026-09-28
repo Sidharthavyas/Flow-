@@ -29,3 +29,16 @@ export function serializeInvestment(doc: Record<string, unknown>) {
     note: String(doc.note ?? ""),
   };
 }
+
+export function serializeSaving(doc: Record<string, unknown>) {
+  return {
+    id: String(doc._id),
+    action: String(doc.action ?? "deposit"),
+    amount: paiseToRupees(Number(doc.amountPaise)),
+    date: String(doc.dateKey ?? ""),
+    fromAccount: String(doc.fromAccount ?? ""),
+    toAccount: String(doc.toAccount ?? ""),
+    method: String(doc.method ?? ""),
+    note: String(doc.note ?? ""),
+  };
+}

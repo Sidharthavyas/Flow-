@@ -3,7 +3,10 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Period = "week" | "month";
-type Page = "expenses" | "investments";
+type Page = "expenses" | "money";
+type MoneyMode = "savings" | "investments";
+type SavingAction = "opening" | "deposit" | "transfer" | "withdrawal";
+type SheetName = "expense" | "investment" | "saving" | "budget" | "day" | "profile";
 type User = { id: string; name: string; email: string };
 type Expense = {
   id: string; amount: number; category: string; date: string; name: string; payment: string;
@@ -13,6 +16,10 @@ type Investment = {
   id: string; name: string; type: string; invested: number; current: number; date: string;
   frequency: string; rate: number | null; platform: string; maturity: string; note: string;
 };
+type Saving = {
+  id: string; action: SavingAction; amount: number; date: string; fromAccount: string;
+  toAccount: string; method: string; note: string;
+};
 type DayInfo = { date: string; spent: number; target: number; status: "none" | "good" | "equal" | "over" };
 type PaceSummary = {
   days: DayInfo[]; spent: number; remaining: number; expected: number; delta: number; recorded: DayInfo[];
@@ -21,16 +28,22 @@ type PaceSummary = {
 
 type ExpenseDraft = Omit<Expense, "id">;
 type InvestmentDraft = Omit<Investment, "id">;
+type SavingDraft = Omit<Saving, "id">;
 
 const EXPENSE_CATEGORIES = [
   "Food & Dining", "Groceries", "Travel & Transport", "Bills & Utilities", "Rent", "Shopping",
   "Entertainment", "Subscriptions", "Health", "Education", "EMI / Loan", "Insurance",
-  "Personal Care", "Gifts", "Taxes", "Other",
+  "Personal Care", "Gifts", "Taxes", "Business Expense", "Inventory / Stock", "Office & Supplies",
+  "Marketing", "Professional Fees", "Other",
 ];
 const INVESTMENT_TYPES = ["SIP", "Mutual Fund", "Stocks", "FD", "RD", "PPF", "EPF", "NPS", "Bonds", "Gold", "REIT", "Other"];
+const PAYMENT_METHODS = ["UPI", "Cash", "Credit Card", "Debit Card", "Bank Transfer", "IMPS", "NEFT", "RTGS", "Wallet", "Auto Debit", "Business Account", "Personal Account"];
+const SAVING_METHODS = ["Bank Transfer", "UPI", "IMPS", "NEFT", "RTGS", "Auto Transfer", "Cash Deposit", "Cash Withdrawal", "Other"];
+const PAGE_SIZE = 5;
 
 const EMPTY_EXPENSE: ExpenseDraft = { amount: 0, category: "", date: "", name: "", payment: "", type: "", recurring: "", extra: "" };
 const EMPTY_INVESTMENT: InvestmentDraft = { name: "", type: "", invested: 0, current: 0, date: "", frequency: "", rate: null, platform: "", maturity: "", note: "" };
+const EMPTY_SAVING: SavingDraft = { action: "deposit", amount: 0, date: "", fromAccount: "", toAccount: "", method: "Bank Transfer", note: "" };
 
 function localDateKey(date = new Date()) {
   const offset = date.getTimezoneOffset();
@@ -65,7 +78,8 @@ function expenseEmoji(category: string) {
   if (c.includes("bill") || c.includes("utilit")) return "💡"; if (c.includes("rent")) return "🏠"; if (c.includes("shopping")) return "🛍️";
   if (c.includes("entertain")) return "🎬"; if (c.includes("subscription")) return "🔁"; if (c.includes("health")) return "❤️";
   if (c.includes("education")) return "📚"; if (c.includes("emi") || c.includes("loan")) return "🏦"; if (c.includes("insurance")) return "🛡️";
-  if (c.includes("personal")) return "✨"; if (c.includes("gift")) return "🎁"; if (c.includes("tax")) return "🧾"; return "💸";
+  if (c.includes("inventory") || c.includes("stock")) return "📦"; if (c.includes("business") || c.includes("office")) return "💼";
+  if (c.includes("marketing")) return "📣"; if (c.includes("personal")) return "✨"; if (c.includes("gift")) return "🎁"; if (c.includes("tax")) return "🧾"; return "💸";
 }
 function investmentEmoji(type: string) {
   const t = type.toLowerCase();
@@ -73,11 +87,34 @@ function investmentEmoji(type: string) {
   if (t.includes("gold")) return "🪙"; if (t.includes("bond")) return "📜"; if (t.includes("ppf") || t.includes("epf") || t.includes("nps")) return "🌱";
   if (t.includes("reit")) return "🏢"; return "💰";
 }
+function savingEmoji(action: SavingAction) {
+  if (action === "opening") return "🏦";
+  if (action === "deposit") return "＋";
+  if (action === "transfer") return "⇄";
+  return "−";
+}
+function savingActionLabel(action: SavingAction) {
+  if (action === "opening") return "Opening balance";
+  if (action === "deposit") return "Saved / deposit";
+  if (action === "transfer") return "Account transfer";
+  return "Withdrawal / used";
+}
+function savingRoute(saving: Saving) {
+  if (saving.action === "transfer") return `${saving.fromAccount} → ${saving.toAccount}`;
+  if (saving.action === "withdrawal") return saving.fromAccount;
+  return saving.toAccount;
+}
 function greeting(name?: string) {
   const now = new Date(), hour = now.getHours();
   const word = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
   const firstName = name?.trim().split(/\s+/)[0];
   return `${word}${firstName ? `, ${firstName}` : ""} · ${new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "long" }).format(now)}`;
+}
+function applySavingToBalances(map: Map<string, number>, saving: Saving) {
+  const add = (account: string, amount: number) => { if (account) map.set(account, (map.get(account) || 0) + amount); };
+  if (saving.action === "opening" || saving.action === "deposit") add(saving.toAccount, saving.amount);
+  if (saving.action === "withdrawal") add(saving.fromAccount, -saving.amount);
+  if (saving.action === "transfer") { add(saving.fromAccount, -saving.amount); add(saving.toAccount, saving.amount); }
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -92,24 +129,34 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 export default function FlowDashboard({ user }: { user: User }) {
   const [page, setPage] = useState<Page>("expenses");
+  const [moneyMode, setMoneyMode] = useState<MoneyMode>("savings");
   const [period, setPeriod] = useState<Period>("month");
   const [anchor, setAnchor] = useState(() => new Date());
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [investments, setInvestments] = useState<Investment[]>([]);
+  const [savings, setSavings] = useState<Saving[]>([]);
+  const [customCategories, setCustomCategories] = useState<string[]>([]);
   const [budget, setBudget] = useState(0);
   const [loadingExpenses, setLoadingExpenses] = useState(true);
   const [loadingInvestments, setLoadingInvestments] = useState(true);
-  const [sheet, setSheet] = useState<"expense" | "investment" | "budget" | "day" | "profile" | null>(null);
+  const [loadingSavings, setLoadingSavings] = useState(true);
+  const [sheet, setSheet] = useState<SheetName | null>(null);
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft>({ ...EMPTY_EXPENSE, date: localDateKey() });
   const [investmentDraft, setInvestmentDraft] = useState<InvestmentDraft>({ ...EMPTY_INVESTMENT, date: localDateKey() });
+  const [savingDraft, setSavingDraft] = useState<SavingDraft>({ ...EMPTY_SAVING, date: localDateKey() });
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [editingInvestmentId, setEditingInvestmentId] = useState<string | null>(null);
+  const [editingSavingId, setEditingSavingId] = useState<string | null>(null);
   const [budgetDraft, setBudgetDraft] = useState(0);
-  const [selectedDay, setSelectedDay] = useState<string>("");
+  const [selectedDay, setSelectedDay] = useState("");
   const [expenseSearch, setExpenseSearch] = useState("");
   const [investmentSearch, setInvestmentSearch] = useState("");
+  const [savingSearch, setSavingSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [savingAccountFilter, setSavingAccountFilter] = useState("");
   const [rangeFilter, setRangeFilter] = useState<{ from: string; to: string } | null>(null);
+  const [expenseListPage, setExpenseListPage] = useState(1);
+  const [savingListPage, setSavingListPage] = useState(1);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -119,7 +166,8 @@ export default function FlowDashboard({ user }: { user: User }) {
   const startKey = localDateKey(start), endKey = localDateKey(end);
 
   const notify = useCallback((message: string) => {
-    setToast(message); if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(message);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 1800);
   }, []);
 
@@ -130,20 +178,52 @@ export default function FlowDashboard({ user }: { user: User }) {
         api<{ expenses: Expense[] }>(`/api/expenses?from=${startKey}&to=${endKey}`),
         api<{ budget: { amount: number } | null }>(`/api/budgets?periodType=${period}&periodStart=${startKey}`),
       ]);
-      setExpenses(expenseResult.expenses); setBudget(budgetResult.budget?.amount ?? 0);
+      setExpenses(expenseResult.expenses);
+      setBudget(budgetResult.budget?.amount ?? 0);
     } catch (e) { notify(e instanceof Error ? e.message : "Could not load expenses"); }
     finally { setLoadingExpenses(false); }
   }, [startKey, endKey, period, notify]);
 
-  const loadInvestments = useCallback(async () => {
+  const refreshInvestments = useCallback(async () => {
     setLoadingInvestments(true);
-    try { setInvestments((await api<{ investments: Investment[] }>("/api/investments")).investments); }
-    catch (e) { notify(e instanceof Error ? e.message : "Could not load investments"); }
+    try {
+      const result = await api<{ investments: Investment[] }>("/api/investments");
+      setInvestments(result.investments);
+      return result.investments;
+    } catch (e) { notify(e instanceof Error ? e.message : "Could not load investments"); return [] as Investment[]; }
     finally { setLoadingInvestments(false); }
   }, [notify]);
 
+  const refreshSavings = useCallback(async () => {
+    setLoadingSavings(true);
+    try {
+      const result = await api<{ savings: Saving[] }>("/api/savings");
+      setSavings(result.savings);
+      return result.savings;
+    } catch (e) { notify(e instanceof Error ? e.message : "Could not load savings"); return [] as Saving[]; }
+    finally { setLoadingSavings(false); }
+  }, [notify]);
+
+  const loadMoneySetup = useCallback(async () => {
+    setLoadingInvestments(true); setLoadingSavings(true);
+    try {
+      const [preferenceResult, investmentResult, savingResult] = await Promise.all([
+        api<{ moneyMode: MoneyMode | null; customExpenseCategories: string[] }>("/api/preferences"),
+        api<{ investments: Investment[] }>("/api/investments"),
+        api<{ savings: Saving[] }>("/api/savings"),
+      ]);
+      setInvestments(investmentResult.investments);
+      setSavings(savingResult.savings);
+      setCustomCategories(preferenceResult.customExpenseCategories);
+      setMoneyMode(preferenceResult.moneyMode ?? (investmentResult.investments.length ? "investments" : "savings"));
+    } catch (e) { notify(e instanceof Error ? e.message : "Could not load your money setup"); }
+    finally { setLoadingInvestments(false); setLoadingSavings(false); }
+  }, [notify]);
+
   useEffect(() => { void loadExpenses(); setSelectedDay(""); setCategoryFilter(""); setRangeFilter(null); }, [loadExpenses]);
-  useEffect(() => { void loadInvestments(); }, [loadInvestments]);
+  useEffect(() => { void loadMoneySetup(); }, [loadMoneySetup]);
+  useEffect(() => { setExpenseListPage(1); }, [expenseSearch, selectedDay, categoryFilter, rangeFilter, startKey, endKey]);
+  useEffect(() => { setSavingListPage(1); }, [savingSearch, savingAccountFilter, startKey, endKey]);
 
   const pace = useMemo(() => {
     const dayCount = Math.round((end.getTime() - start.getTime()) / 86_400_000);
@@ -175,15 +255,26 @@ export default function FlowDashboard({ user }: { user: User }) {
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
   }, [expenses]);
 
+  const quickExpenseCategories = useMemo(() => {
+    const seen = new Set<string>();
+    return [...categories.map(([name]) => name), ...customCategories, ...EXPENSE_CATEGORIES]
+      .filter((name) => { const key = name.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; })
+      .slice(0, 5);
+  }, [categories, customCategories]);
+
   const filteredExpenses = useMemo(() => {
     const query = expenseSearch.trim().toLowerCase();
     return [...expenses].filter((e) => {
       if (selectedDay && e.date !== selectedDay) return false;
       if (categoryFilter && e.category !== categoryFilter) return false;
       if (rangeFilter && !(e.date >= rangeFilter.from && e.date < rangeFilter.to)) return false;
-      return !query || [e.category, e.name, e.payment, e.extra].some((v) => v.toLowerCase().includes(query));
+      return !query || [e.category, e.name, e.payment, e.type, e.recurring, e.extra].some((v) => v.toLowerCase().includes(query));
     }).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   }, [expenses, expenseSearch, selectedDay, categoryFilter, rangeFilter]);
+
+  const expensePages = Math.max(1, Math.ceil(filteredExpenses.length / PAGE_SIZE));
+  const pagedExpenses = filteredExpenses.slice((expenseListPage - 1) * PAGE_SIZE, expenseListPage * PAGE_SIZE);
+  useEffect(() => { setExpenseListPage((current) => Math.min(current, expensePages)); }, [expensePages]);
 
   const filteredInvestments = useMemo(() => {
     const query = investmentSearch.trim().toLowerCase();
@@ -195,6 +286,31 @@ export default function FlowDashboard({ user }: { user: User }) {
     return { invested, current, gain: current - invested };
   }, [investments]);
 
+  const savingAccounts = useMemo(() => {
+    const map = new Map<string, number>();
+    [...savings].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).forEach((saving) => applySavingToBalances(map, saving));
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [savings]);
+  const savingAccountNames = useMemo(() => savingAccounts.map(([name]) => name), [savingAccounts]);
+  const totalSavings = useMemo(() => savingAccounts.reduce((sum, [, amount]) => sum + amount, 0), [savingAccounts]);
+  const periodSavings = useMemo(() => savings.filter((saving) => saving.date >= startKey && saving.date < endKey), [savings, startKey, endKey]);
+  const savingStats = useMemo(() => ({
+    saved: periodSavings.filter((s) => s.action === "deposit").reduce((sum, s) => sum + s.amount, 0),
+    used: periodSavings.filter((s) => s.action === "withdrawal").reduce((sum, s) => sum + s.amount, 0),
+    transferred: periodSavings.filter((s) => s.action === "transfer").reduce((sum, s) => sum + s.amount, 0),
+    openings: periodSavings.filter((s) => s.action === "opening").reduce((sum, s) => sum + s.amount, 0),
+  }), [periodSavings]);
+  const filteredSavings = useMemo(() => {
+    const query = savingSearch.trim().toLowerCase();
+    return [...periodSavings].filter((saving) => {
+      if (savingAccountFilter && saving.fromAccount !== savingAccountFilter && saving.toAccount !== savingAccountFilter) return false;
+      return !query || [saving.fromAccount, saving.toAccount, saving.method, saving.note, savingActionLabel(saving.action)].some((v) => v.toLowerCase().includes(query));
+    }).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  }, [periodSavings, savingSearch, savingAccountFilter]);
+  const savingPages = Math.max(1, Math.ceil(filteredSavings.length / PAGE_SIZE));
+  const pagedSavings = filteredSavings.slice((savingListPage - 1) * PAGE_SIZE, savingListPage * PAGE_SIZE);
+  useEffect(() => { setSavingListPage((current) => Math.min(current, savingPages)); }, [savingPages]);
+
   function shiftPeriod(by: number) {
     setAnchor((prev) => {
       const next = new Date(prev);
@@ -203,13 +319,47 @@ export default function FlowDashboard({ user }: { user: User }) {
     });
   }
   function clearFilters() { setSelectedDay(""); setCategoryFilter(""); setRangeFilter(null); setExpenseSearch(""); }
-  function openNew(kind: "expense" | "investment") {
-    if (kind === "expense") { setEditingExpenseId(null); setExpenseDraft({ ...EMPTY_EXPENSE, date: localDateKey(new Date(Math.max(start.getTime(), Math.min(Date.now(), end.getTime() - 1)))) }); }
-    else { setEditingInvestmentId(null); setInvestmentDraft({ ...EMPTY_INVESTMENT, date: localDateKey() }); }
+  function openNew(kind: "expense" | "investment" | "saving") {
+    if (kind === "expense") {
+      setEditingExpenseId(null);
+      setExpenseDraft({ ...EMPTY_EXPENSE, date: localDateKey(new Date(Math.max(start.getTime(), Math.min(Date.now(), end.getTime() - 1)))) });
+    } else if (kind === "investment") {
+      setEditingInvestmentId(null); setInvestmentDraft({ ...EMPTY_INVESTMENT, date: localDateKey() });
+    } else {
+      setEditingSavingId(null); setSavingDraft({ ...EMPTY_SAVING, date: localDateKey() });
+    }
     setSheet(kind);
   }
   function editExpense(expense: Expense) { setEditingExpenseId(expense.id); setExpenseDraft({ ...expense }); setSheet("expense"); }
   function editInvestment(investment: Investment) { setEditingInvestmentId(investment.id); setInvestmentDraft({ ...investment }); setSheet("investment"); }
+  function editSaving(saving: Saving) { setEditingSavingId(saving.id); setSavingDraft({ ...saving }); setSheet("saving"); }
+
+  async function saveMoneyMode(nextMode: MoneyMode) {
+    if (nextMode === moneyMode) return;
+    const previous = moneyMode; setMoneyMode(nextMode);
+    try { await api("/api/preferences", { method: "PATCH", body: JSON.stringify({ moneyMode: nextMode }) }); }
+    catch (e) { setMoneyMode(previous); notify(e instanceof Error ? e.message : "Could not save preference"); }
+  }
+
+  async function addCustomCategory(raw: string) {
+    const name = raw.trim();
+    if (!name) return null;
+    const existing = [...customCategories, ...EXPENSE_CATEGORIES].find((item) => item.toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    const previous = customCategories;
+    const next = [...customCategories, name];
+    setCustomCategories(next);
+    try {
+      const result = await api<{ customExpenseCategories: string[] }>("/api/preferences", { method: "PATCH", body: JSON.stringify({ customExpenseCategories: next }) });
+      setCustomCategories(result.customExpenseCategories);
+      notify("Custom category added");
+      return name;
+    } catch (e) {
+      setCustomCategories(previous);
+      notify(e instanceof Error ? e.message : "Could not add category");
+      return null;
+    }
+  }
 
   async function saveExpense(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true);
@@ -233,14 +383,30 @@ export default function FlowDashboard({ user }: { user: User }) {
       const url = editingInvestmentId ? `/api/investments/${editingInvestmentId}` : "/api/investments";
       const method = editingInvestmentId ? "PATCH" : "POST";
       await api(url, { method, body: JSON.stringify(investmentDraft) });
-      await loadInvestments(); setSheet(null); notify(editingInvestmentId ? "Investment updated" : "Investment added");
+      await refreshInvestments(); setSheet(null); notify(editingInvestmentId ? "Investment updated" : "Investment added");
     } catch (e) { notify(e instanceof Error ? e.message : "Could not save investment"); }
     finally { setBusy(false); }
   }
   async function deleteInvestment() {
     if (!editingInvestmentId || busy) return; setBusy(true);
-    try { await api(`/api/investments/${editingInvestmentId}`, { method: "DELETE" }); await loadInvestments(); setSheet(null); notify("Investment deleted"); }
+    try { await api(`/api/investments/${editingInvestmentId}`, { method: "DELETE" }); await refreshInvestments(); setSheet(null); notify("Investment deleted"); }
     catch (e) { notify(e instanceof Error ? e.message : "Could not delete investment"); }
+    finally { setBusy(false); }
+  }
+  async function saveSaving(event: FormEvent) {
+    event.preventDefault(); if (busy) return; setBusy(true);
+    try {
+      const url = editingSavingId ? `/api/savings/${editingSavingId}` : "/api/savings";
+      const method = editingSavingId ? "PATCH" : "POST";
+      await api(url, { method, body: JSON.stringify(savingDraft) });
+      await refreshSavings(); setSheet(null); notify(editingSavingId ? "Savings activity updated" : "Savings activity added");
+    } catch (e) { notify(e instanceof Error ? e.message : "Could not save savings activity"); }
+    finally { setBusy(false); }
+  }
+  async function deleteSaving() {
+    if (!editingSavingId || busy) return; setBusy(true);
+    try { await api(`/api/savings/${editingSavingId}`, { method: "DELETE" }); await refreshSavings(); setSheet(null); notify("Savings activity deleted"); }
+    catch (e) { notify(e instanceof Error ? e.message : "Could not delete savings activity"); }
     finally { setBusy(false); }
   }
   async function saveBudget(event: FormEvent) {
@@ -257,7 +423,7 @@ export default function FlowDashboard({ user }: { user: User }) {
     catch (e) { notify(e instanceof Error ? e.message : "Could not sign out"); setBusy(false); }
   }
 
-  const insight = useMemo(() => {
+  const expenseInsight = useMemo(() => {
     if (!budget && !expenses.length) return "Set a budget or add an expense and Flow will show one useful action here.";
     if (!budget) return `You’ve spent ${money(pace.spent)} this ${period}. Set a budget to unlock pace and daily allowance.`;
     if (!pace.isCurrent) return pace.remaining >= 0 ? `You finished this period ${money(pace.remaining)} under budget.` : `This period ended ${money(Math.abs(pace.remaining))} over budget.`;
@@ -267,13 +433,29 @@ export default function FlowDashboard({ user }: { user: User }) {
     return `Your current daily allowance is ${money(pace.daily)}. It will adjust automatically as you spend.`;
   }, [budget, expenses.length, pace, period]);
 
+  const savingsInsight = useMemo(() => {
+    if (!savings.length) return "Start with an opening balance, then record deposits, withdrawals and transfers. Transfers move money without increasing your total savings.";
+    const negativeAccounts = savingAccounts.filter(([, amount]) => amount < 0);
+    if (negativeAccounts.length) return `${negativeAccounts[0][0]} is below zero in Flow. Check whether an opening balance or earlier deposit is missing.`;
+    if (savingStats.transferred > 0) return `${money(savingStats.transferred)} moved between your own accounts this ${period}. Flow keeps transfers neutral so savings are not double-counted.`;
+    const net = savingStats.saved - savingStats.used;
+    if (net > 0) return `Your savings increased by ${money(net)} from new saving activity this ${period}, excluding account transfers and opening balances.`;
+    if (net < 0) return `You used ${money(Math.abs(net))} more than you newly saved this ${period}. Your account balances still include earlier savings.`;
+    return "Your account balances are reconciled from the activity you record, so transfers never inflate the total.";
+  }, [savings.length, savingAccounts, savingStats, period]);
+
+  const secondaryLabel = moneyMode === "savings" ? "Savings" : "Investments";
+  const secondaryIcon = moneyMode === "savings" ? "💰" : "📈";
+  const addKind = page === "expenses" ? "expense" : moneyMode === "savings" ? "saving" : "investment";
+  const showPeriodControls = page === "expenses" || moneyMode === "savings";
+
   return (
     <div className="flow-app">
       <aside className="desktop-rail" aria-label="Main navigation">
         <div className="rail-brand">Flow</div>
         <button className={`rail-tab ${page === "expenses" ? "active" : ""}`} onClick={() => setPage("expenses")}><span>🧾</span>Expenses</button>
-        <button className={`rail-tab ${page === "investments" ? "active" : ""}`} onClick={() => setPage("investments")}><span>📈</span>Investments</button>
-        <button className="rail-add" onClick={() => openNew(page === "expenses" ? "expense" : "investment")}>＋ Add {page === "expenses" ? "expense" : "investment"}</button>
+        <button className={`rail-tab ${page === "money" ? "active" : ""}`} onClick={() => setPage("money")}><span>{secondaryIcon}</span>{secondaryLabel}</button>
+        <button className="rail-add" onClick={() => openNew(addKind)}>＋ Add {addKind === "saving" ? "saving" : addKind}</button>
         <div className="rail-spacer" />
         <button className="rail-user" onClick={() => setSheet("profile")}><span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span><span><strong>{user.name}</strong><small>{user.email}</small></span></button>
       </aside>
@@ -290,21 +472,34 @@ export default function FlowDashboard({ user }: { user: User }) {
         <main className="content">
           <section className="page-heading">
             <p className="greeting"><strong>{greeting(user.name).split(" · ")[0]}</strong> · {greeting(user.name).split(" · ")[1]}</p>
-            <p className="kicker">{page === "expenses" ? "Personal money" : "Long-term money"}</p>
-            <h1>{page === "expenses" ? "Expenses" : "Investments"}</h1>
-            <div className="period-controls">
+            <div className="heading-line">
+              <div>
+                <p className="kicker">{page === "expenses" ? "Personal money" : moneyMode === "savings" ? "Cash reserves" : "Long-term money"}</p>
+                <h1>{page === "expenses" ? "Expenses" : secondaryLabel}</h1>
+              </div>
+              {page === "money" && <div className="money-mode-switch" aria-label="Choose money view">
+                <button className={moneyMode === "savings" ? "active" : ""} onClick={() => void saveMoneyMode("savings")}>Savings</button>
+                <button className={moneyMode === "investments" ? "active" : ""} onClick={() => void saveMoneyMode("investments")}>Investments</button>
+              </div>}
+            </div>
+            {showPeriodControls && <div className="period-controls">
               <div className="period-nav"><button onClick={() => shiftPeriod(-1)} aria-label="Previous period">‹</button><strong>{periodTitle(anchor, period)}</strong><button onClick={() => shiftPeriod(1)} aria-label="Next period">›</button></div>
               <div className="period-right"><button className="today-button" onClick={() => setAnchor(new Date())}>Today</button><div className="segmented"><button className={period === "week" ? "active" : ""} onClick={() => setPeriod("week")}>Week</button><button className={period === "month" ? "active" : ""} onClick={() => setPeriod("month")}>Month</button></div></div>
-            </div>
+            </div>}
           </section>
 
           {page === "expenses" ? (
-            <ExpensesView loading={loadingExpenses} budget={budget} pace={pace} insight={insight} expenses={expenses} categories={categories}
-              filteredExpenses={filteredExpenses} selectedDay={selectedDay} period={period} anchor={anchor} start={start}
+            <ExpensesView loading={loadingExpenses} budget={budget} pace={pace} insight={expenseInsight} expenses={expenses} categories={categories}
+              filteredExpenses={filteredExpenses} pagedExpenses={pagedExpenses} selectedDay={selectedDay} period={period} anchor={anchor} start={start}
               setSheet={setSheet} setBudgetDraft={setBudgetDraft} onEdit={editExpense} onSelectDay={(day) => { setSelectedDay(day); setSheet("day"); }}
               categoryFilter={categoryFilter} onCategory={(cat) => { setCategoryFilter(cat); setSelectedDay(""); setRangeFilter(null); }}
               expenseSearch={expenseSearch} setExpenseSearch={setExpenseSearch} onRange={(range) => { setRangeFilter(range); setSelectedDay(""); setCategoryFilter(""); }}
-              clearFilters={clearFilters} onAdd={() => openNew("expense")} />
+              rangeFilter={rangeFilter} clearFilters={clearFilters} onAdd={() => openNew("expense")} page={expenseListPage} pages={expensePages} setPage={setExpenseListPage} />
+          ) : moneyMode === "savings" ? (
+            <SavingsView loading={loadingSavings} total={totalSavings} stats={savingStats} insight={savingsInsight} accounts={savingAccounts}
+              savings={periodSavings} filteredSavings={filteredSavings} pagedSavings={pagedSavings} accountFilter={savingAccountFilter} setAccountFilter={setSavingAccountFilter}
+              search={savingSearch} setSearch={setSavingSearch} period={period} onEdit={editSaving} onAdd={() => openNew("saving")}
+              page={savingListPage} pages={savingPages} setPage={setSavingListPage} />
           ) : (
             <InvestmentsView loading={loadingInvestments} investments={filteredInvestments} allInvestments={investments} totals={investmentTotals}
               search={investmentSearch} setSearch={setInvestmentSearch} onEdit={editInvestment} onAdd={() => openNew("investment")} />
@@ -314,13 +509,14 @@ export default function FlowDashboard({ user }: { user: User }) {
 
       <nav className="mobile-nav" aria-label="Main navigation">
         <button className={page === "expenses" ? "active" : ""} onClick={() => setPage("expenses")}><span>🧾</span><small>Expenses</small></button>
-        <button className="mobile-fab" onClick={() => openNew(page === "expenses" ? "expense" : "investment")} aria-label={`Add ${page === "expenses" ? "expense" : "investment"}`}>＋</button>
-        <button className={page === "investments" ? "active" : ""} onClick={() => setPage("investments")}><span>📈</span><small>Investments</small></button>
+        <button className="mobile-fab" onClick={() => openNew(addKind)} aria-label={`Add ${addKind}`}>＋</button>
+        <button className={page === "money" ? "active" : ""} onClick={() => setPage("money")}><span>{secondaryIcon}</span><small>{secondaryLabel}</small></button>
       </nav>
 
       {sheet && <Sheet onClose={() => setSheet(null)}>
-        {sheet === "expense" && <ExpenseForm draft={expenseDraft} setDraft={setExpenseDraft} editing={Boolean(editingExpenseId)} busy={busy} onSubmit={saveExpense} onDelete={deleteExpense} />}
+        {sheet === "expense" && <ExpenseForm draft={expenseDraft} setDraft={setExpenseDraft} editing={Boolean(editingExpenseId)} busy={busy} onSubmit={saveExpense} onDelete={deleteExpense} customCategories={customCategories} quickCategories={quickExpenseCategories} onAddCustomCategory={addCustomCategory} />}
         {sheet === "investment" && <InvestmentForm draft={investmentDraft} setDraft={setInvestmentDraft} editing={Boolean(editingInvestmentId)} busy={busy} onSubmit={saveInvestment} onDelete={deleteInvestment} />}
+        {sheet === "saving" && <SavingForm draft={savingDraft} setDraft={setSavingDraft} editing={Boolean(editingSavingId)} busy={busy} onSubmit={saveSaving} onDelete={deleteSaving} accountNames={savingAccountNames} />}
         {sheet === "budget" && <BudgetForm period={period} value={budgetDraft} setValue={setBudgetDraft} busy={busy} onSubmit={saveBudget} />}
         {sheet === "day" && <DaySheet day={selectedDay} days={pace.days} expenses={expenses} budget={budget} onView={() => setSheet(null)} />}
         {sheet === "profile" && <ProfileSheet user={user} busy={busy} onSignOut={signOut} />}
@@ -332,14 +528,15 @@ export default function FlowDashboard({ user }: { user: User }) {
 
 function ExpensesView(props: {
   loading: boolean; budget: number; pace: PaceSummary; insight: string; expenses: Expense[]; categories: [string, number][];
-  filteredExpenses: Expense[]; selectedDay: string; period: Period; anchor: Date; start: Date;
-  setSheet: (s: "budget") => void; setBudgetDraft: (v: number) => void; onEdit: (e: Expense) => void; onSelectDay: (d: string) => void;
+  filteredExpenses: Expense[]; pagedExpenses: Expense[]; selectedDay: string; period: Period; anchor: Date; start: Date;
+  setSheet: (s: SheetName) => void; setBudgetDraft: (v: number) => void; onEdit: (e: Expense) => void; onSelectDay: (d: string) => void;
   categoryFilter: string; onCategory: (cat: string) => void; expenseSearch: string; setExpenseSearch: (s: string) => void;
-  onRange: (range: { from: string; to: string }) => void; clearFilters: () => void; onAdd: () => void;
+  onRange: (range: { from: string; to: string }) => void; rangeFilter: { from: string; to: string } | null; clearFilters: () => void; onAdd: () => void;
+  page: number; pages: number; setPage: (page: number) => void;
 }) {
-  const { loading, budget, pace, insight, expenses, categories, filteredExpenses, selectedDay, period, anchor, start, setSheet, setBudgetDraft, onEdit, onSelectDay, categoryFilter, onCategory, expenseSearch, setExpenseSearch, onRange, clearFilters, onAdd } = props;
+  const { loading, budget, pace, insight, expenses, categories, filteredExpenses, pagedExpenses, selectedDay, period, anchor, start, setSheet, setBudgetDraft, onEdit, onSelectDay, categoryFilter, onCategory, expenseSearch, setExpenseSearch, onRange, rangeFilter, clearFilters, onAdd, page, pages, setPage } = props;
   const usedPct = budget ? Math.max(0, pace.spent / budget * 100) : 0;
-  const anyFilter = Boolean(selectedDay || categoryFilter || expenseSearch);
+  const anyFilter = Boolean(selectedDay || categoryFilter || expenseSearch || rangeFilter);
   return <div className="page-enter">
     <div className="summary-grid">
       <section className="budget-hero card-surface">
@@ -367,10 +564,40 @@ function ExpensesView(props: {
       <section className="section-block"><SectionTitle title="Calendar" note="Tap a day to see how it went." /><Calendar period={period} anchor={anchor} days={pace.days} selectedDay={selectedDay} onSelect={onSelectDay} /></section>
       <section className="section-block"><SectionTitle title="Categories" note="Where your money went." /><CategoryList categories={categories} total={pace.spent} active={categoryFilter} onSelect={onCategory} /></section>
     </div>
-    <section className="section-block recent" id="recent-expenses"><SectionTitle title="Recent expenses" note={expenses.length ? `${filteredExpenses.length} of ${expenses.length} shown` : "No expenses yet."} action={anyFilter ? <button onClick={clearFilters}>Clear filter</button> : undefined} />
+    <section className="section-block recent" id="recent-expenses"><SectionTitle title="Recent expenses" note={expenses.length ? `${filteredExpenses.length} matching · latest 5 per page` : "No expenses yet."} action={anyFilter ? <button onClick={clearFilters}>Clear filter</button> : undefined} />
       <div className="list-card">
         {expenses.length >= 4 && <div className="search-row"><input value={expenseSearch} onChange={(e) => setExpenseSearch(e.target.value)} placeholder="Search expenses" /></div>}
-        {filteredExpenses.length ? filteredExpenses.map((e) => <button className="money-row" key={e.id} onClick={() => onEdit(e)}><span className="row-icon">{expenseEmoji(e.category)}</span><span className="row-main"><strong>{e.category}</strong><small>{longDate(e.date)}</small></span><b>{money(e.amount)}</b></button>) : <Empty title={expenses.length ? "Nothing matches this filter" : "Your spending starts here"} copy={expenses.length ? "Clear the filter to see your expenses again." : "Add your first expense and the dashboard builds itself."} action={!expenses.length ? <button className="empty-action" onClick={onAdd}>＋ Add first expense</button> : undefined} />}
+        {pagedExpenses.length ? pagedExpenses.map((e) => <button className="money-row" key={e.id} onClick={() => onEdit(e)}><span className="row-icon">{expenseEmoji(e.category)}</span><span className="row-main"><strong>{e.category}</strong><small className="row-description">{[e.name, longDate(e.date), e.payment].filter(Boolean).join(" · ")}</small></span><b>{money(e.amount)}</b></button>) : <Empty title={expenses.length ? "Nothing matches this filter" : "Your spending starts here"} copy={expenses.length ? "Clear the filter to see your expenses again." : "Add your first expense and the dashboard builds itself."} action={!expenses.length ? <button className="empty-action" onClick={onAdd}>＋ Add first expense</button> : undefined} />}
+        {filteredExpenses.length > PAGE_SIZE && <Pagination page={page} pages={pages} setPage={setPage} label="expense pages" />}
+      </div>
+    </section>
+  </div>;
+}
+
+function SavingsView({ loading, total, stats, insight, accounts, savings, filteredSavings, pagedSavings, accountFilter, setAccountFilter, search, setSearch, period, onEdit, onAdd, page, pages, setPage }: {
+  loading: boolean; total: number; stats: { saved: number; used: number; transferred: number; openings: number }; insight: string;
+  accounts: [string, number][]; savings: Saving[]; filteredSavings: Saving[]; pagedSavings: Saving[]; accountFilter: string; setAccountFilter: (value: string) => void;
+  search: string; setSearch: (value: string) => void; period: Period; onEdit: (saving: Saving) => void; onAdd: () => void; page: number; pages: number; setPage: (page: number) => void;
+}) {
+  const net = stats.saved - stats.used;
+  return <div className="page-enter">
+    <section className="investment-hero savings-hero card-surface">
+      <div><p>Total savings</p><h2 className={total < 0 ? "negative" : ""}>{money(total)}</h2><div className="hero-copy">Across the accounts you track in Flow</div></div>
+      <div className="investment-mini">
+        <Stat label={`Saved this ${period}`} value={money(stats.saved)} note="New deposits only" tone={stats.saved > 0 ? "good" : undefined} />
+        <Stat label="Net change" value={`${net >= 0 ? "+" : "−"}${money(Math.abs(net))}`} note="Deposits minus withdrawals" tone={net >= 0 ? "good" : "bad"} />
+      </div>
+    </section>
+    <div className="insight savings-insight"><span>i</span><p>{insight}</p></div>
+    <div className="two-column investment-columns">
+      <section className="section-block"><SectionTitle title="Savings accounts" note="Tap an account to filter this period's activity." /><AccountList accounts={accounts} total={total} active={accountFilter} onSelect={setAccountFilter} /></section>
+      <section className="section-block"><SectionTitle title="This period" note="Transfers are tracked separately and stay neutral." /><div className="card-surface savings-summary">{loading ? <Skeleton height={150} /> : <><Stat label="Withdrawn / used" value={money(stats.used)} note="Money moved out of savings" /><Stat label="Account transfers" value={money(stats.transferred)} note="Moved between your accounts" /><Stat label="Opening balances" value={money(stats.openings)} note="Setup amounts, not new saving" /></>}</div></section>
+    </div>
+    <section className="section-block"><SectionTitle title="Savings activity" note={savings.length ? `${filteredSavings.length} matching · latest 5 per page` : "No activity in this period."} action={accountFilter ? <button onClick={() => setAccountFilter("")}>Clear account</button> : undefined} />
+      <div className="list-card">
+        {savings.length >= 4 && <div className="search-row"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search savings activity" /></div>}
+        {pagedSavings.length ? pagedSavings.map((saving) => <button className="money-row saving-row" key={saving.id} onClick={() => onEdit(saving)}><span className={`row-icon saving-icon ${saving.action}`}>{savingEmoji(saving.action)}</span><span className="row-main"><strong>{savingActionLabel(saving.action)}</strong><small className="row-description">{[savingRoute(saving), saving.method, longDate(saving.date)].filter(Boolean).join(" · ")}</small></span><span className="row-values"><b className={saving.action === "withdrawal" ? "negative" : saving.action === "transfer" ? "" : "positive"}>{saving.action === "withdrawal" ? "−" : saving.action === "transfer" ? "" : "+"}{money(saving.amount)}</b>{saving.note && <small>{saving.note}</small>}</span></button>) : <Empty title={savings.length ? "Nothing matches this filter" : "Start tracking your savings"} copy={savings.length ? "Try another search or clear the account filter." : "Add an opening balance or your first deposit. Flow will keep transfers from being double-counted."} action={!savings.length ? <button className="empty-action" onClick={onAdd}>＋ Add savings activity</button> : undefined} />}
+        {filteredSavings.length > PAGE_SIZE && <Pagination page={page} pages={pages} setPage={setPage} label="savings pages" />}
       </div>
     </section>
   </div>;
@@ -378,14 +605,14 @@ function ExpensesView(props: {
 
 function InvestmentsView({ loading, investments, allInvestments, totals, search, setSearch, onEdit, onAdd }: { loading: boolean; investments: Investment[]; allInvestments: Investment[]; totals: { invested: number; current: number; gain: number }; search: string; setSearch: (s: string) => void; onEdit: (i: Investment) => void; onAdd: () => void }) {
   return <div className="page-enter">
-    <section className="investment-hero card-surface"><div><p>Current value</p><h2>{money(totals.current)}</h2></div><div className="investment-mini"><Stat label="Invested" value={money(totals.invested)} note="Total principal" /><Stat label="Gain / loss" value={`${totals.gain >= 0 ? "+" : ""}${money(totals.gain)}`} note="Current vs invested" tone={totals.gain >= 0 ? "good" : "bad"} /></div></section>
+    <section className="investment-hero card-surface"><div><p>Current value</p><h2>{money(totals.current)}</h2></div><div className="investment-mini"><Stat label="Invested" value={money(totals.invested)} note="Total principal" /><Stat label="Gain / loss" value={`${totals.gain >= 0 ? "+" : "−"}${money(Math.abs(totals.gain))}`} note="Current vs invested" tone={totals.gain >= 0 ? "good" : "bad"} /></div></section>
     <div className="two-column investment-columns">
       <section className="section-block"><SectionTitle title="Allocation" note="Simple, not a trading dashboard." /><Allocation investments={allInvestments} total={totals.current} /></section>
       <section className="section-block"><SectionTitle title="Portfolio position" note="Invested vs current value." /><div className="card-surface portfolio-bars">{loading ? <Skeleton height={160} /> : <PortfolioBars invested={totals.invested} current={totals.current} />}</div></section>
     </div>
     <section className="section-block"><SectionTitle title="Your investments" note={allInvestments.length ? `${investments.length} of ${allInvestments.length} shown` : "No holdings yet."} />
       <div className="list-card">{allInvestments.length >= 4 && <div className="search-row"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search investments" /></div>}
-        {investments.length ? investments.map((i) => { const gain = i.current - i.invested; return <button className="money-row" key={i.id} onClick={() => onEdit(i)}><span className="row-icon">{investmentEmoji(i.type)}</span><span className="row-main"><strong>{i.name}</strong><small>{i.type}{i.platform ? ` · ${i.platform}` : ""}</small></span><span className="row-values"><b>{money(i.current)}</b><small className={gain >= 0 ? "positive" : "negative"}>{gain >= 0 ? "+" : ""}{money(gain)}</small></span></button>; }) : <Empty title="Start your portfolio" copy="Track SIPs, FDs, stocks and more in one calm view." action={<button className="empty-action" onClick={onAdd}>＋ Add first investment</button>} />}
+        {investments.length ? investments.map((i) => { const gain = i.current - i.invested; return <button className="money-row" key={i.id} onClick={() => onEdit(i)}><span className="row-icon">{investmentEmoji(i.type)}</span><span className="row-main"><strong>{i.name}</strong><small>{i.type}{i.platform ? ` · ${i.platform}` : ""}</small></span><span className="row-values"><b>{money(i.current)}</b><small className={gain >= 0 ? "positive" : "negative"}>{gain >= 0 ? "+" : "−"}{money(Math.abs(gain))}</small></span></button>; }) : <Empty title="Start your portfolio" copy="Track SIPs, FDs, stocks and more in one calm view." action={<button className="empty-action" onClick={onAdd}>＋ Add first investment</button>} />}
       </div>
     </section>
   </div>;
@@ -395,6 +622,9 @@ function Stat({ label, value, note, tone }: { label: string; value: string; note
 function SectionTitle({ title, note, action }: { title: string; note: string; action?: React.ReactNode }) { return <div className="section-title"><div><h3>{title}</h3><p>{note}</p></div>{action}</div>; }
 function Skeleton({ height }: { height: number }) { return <div className="skeleton" style={{ height }} />; }
 function Empty({ title, copy, action }: { title: string; copy: string; action?: React.ReactNode }) { return <div className="empty"><strong>{title}</strong><p>{copy}</p>{action}</div>; }
+function Pagination({ page, pages, setPage, label }: { page: number; pages: number; setPage: (page: number) => void; label: string }) {
+  return <div className="pagination" aria-label={label}><button onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1} aria-label="Previous page">‹</button><span>Page <strong>{page}</strong> of {pages}</span><button onClick={() => setPage(Math.min(pages, page + 1))} disabled={page >= pages} aria-label="Next page">›</button></div>;
+}
 
 function PaceGraphic({ budget, spent, expected }: { budget: number; spent: number; expected: number }) {
   if (!budget) return <div className="pace-empty"><div className="pace-empty-line"><i /><i /><i /></div><p>Set a budget to reveal your spending runway.</p></div>;
@@ -427,6 +657,12 @@ function CategoryList({ categories, total, active, onSelect }: { categories: [st
   return <div className="card-surface category-list">{categories.slice(0, 7).map(([name, amount]) => <button key={name} className={active === name ? "active" : ""} onClick={() => onSelect(active === name ? "" : name)}><span className="category-dot" /><span><strong>{name}</strong><i><b style={{ width: `${total ? amount / total * 100 : 0}%` }} /></i></span><b>{money(amount)}</b></button>)}</div>;
 }
 
+function AccountList({ accounts, total, active, onSelect }: { accounts: [string, number][]; total: number; active: string; onSelect: (account: string) => void }) {
+  if (!accounts.length) return <div className="card-surface"><Empty title="No savings accounts yet" copy="Add an opening balance or deposit and Flow will build the account view automatically." /></div>;
+  const max = Math.max(...accounts.map(([, amount]) => Math.abs(amount)), 1);
+  return <div className="card-surface account-list">{accounts.slice(0, 8).map(([name, amount]) => <button key={name} className={active === name ? "active" : ""} onClick={() => onSelect(active === name ? "" : name)}><span className="account-icon">🏦</span><span><strong>{name}</strong><i><b className={amount < 0 ? "negative-bar" : ""} style={{ width: `${Math.abs(amount) / max * 100}%` }} /></i></span><b className={amount < 0 ? "negative" : ""}>{money(amount)}</b></button>)}{accounts.length > 8 && <div className="account-more">+{accounts.length - 8} more accounts · total {money(total)}</div>}</div>;
+}
+
 function Allocation({ investments, total }: { investments: Investment[]; total: number }) {
   const map = new Map<string, number>(); investments.forEach((i) => map.set(i.type, (map.get(i.type) || 0) + i.current)); const rows = [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   if (!rows.length) return <div className="card-surface"><Empty title="No investments yet" copy="Add a holding to see your allocation." /></div>;
@@ -438,9 +674,34 @@ function PortfolioBars({ invested, current }: { invested: number; current: numbe
 
 function Sheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) { return <div className="sheet-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}><div className="sheet"><div className="sheet-handle" /><button className="sheet-close" onClick={onClose} aria-label="Close">×</button>{children}</div></div>; }
 
-function ExpenseForm({ draft, setDraft, editing, busy, onSubmit, onDelete }: { draft: ExpenseDraft; setDraft: (d: ExpenseDraft) => void; editing: boolean; busy: boolean; onSubmit: (e: FormEvent) => void; onDelete: () => void }) {
-  return <form onSubmit={onSubmit}><h2>{editing ? "Edit expense" : "Add expense"}</h2><div className="amount-field"><span>₹</span><input autoFocus type="number" min="0.01" step="0.01" value={draft.amount || ""} onChange={(e) => setDraft({ ...draft, amount: Number(e.target.value) })} placeholder="0" required /></div><div className="quick-cats">{["Food & Dining", "Groceries", "Travel & Transport", "Bills & Utilities", "Shopping"].map((cat) => <button type="button" className={draft.category === cat ? "active" : ""} key={cat} onClick={() => setDraft({ ...draft, category: cat })}>{cat.replace(" & Dining", "").replace(" & Transport", "").replace(" & Utilities", "")}</button>)}</div><div className="form-stack"><label>Category<select value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} required><option value="">Choose category</option>{EXPENSE_CATEGORIES.map((x) => <option key={x}>{x}</option>)}</select></label><label>Description<input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Lunch, Uber, electricity…" /></label><label>Date<input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} required /></label><details><summary>More details</summary><div className="form-stack more-fields"><div className="form-two"><label>Payment<select value={draft.payment} onChange={(e) => setDraft({ ...draft, payment: e.target.value })}><option value="">Not set</option>{["UPI", "Cash", "Credit Card", "Debit Card", "Bank Transfer", "Wallet", "Auto Debit"].map((x) => <option key={x}>{x}</option>)}</select></label><label>Type<select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}><option value="">Not set</option><option>Essential</option><option>Discretionary</option><option>One-time</option></select></label></div><label>Recurring<select value={draft.recurring} onChange={(e) => setDraft({ ...draft, recurring: e.target.value })}><option value="">No</option><option>Weekly</option><option>Monthly</option><option>Yearly</option></select></label><label>Note<textarea value={draft.extra} onChange={(e) => setDraft({ ...draft, extra: e.target.value })} placeholder="Optional note" /></label></div></details></div><button className="primary-save" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Add expense"}</button>{editing && <button type="button" className="danger-button" onClick={onDelete} disabled={busy}>Delete expense</button>}</form>;
+function ExpenseForm({ draft, setDraft, editing, busy, onSubmit, onDelete, customCategories, quickCategories, onAddCustomCategory }: {
+  draft: ExpenseDraft; setDraft: (d: ExpenseDraft) => void; editing: boolean; busy: boolean; onSubmit: (e: FormEvent) => void; onDelete: () => void;
+  customCategories: string[]; quickCategories: string[]; onAddCustomCategory: (name: string) => Promise<string | null>;
+}) {
+  const [showCustom, setShowCustom] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [addingCustom, setAddingCustom] = useState(false);
+  const customKeys = new Set(customCategories.map((item) => item.toLowerCase()));
+  const standardCategories = EXPENSE_CATEGORIES.filter((item) => !customKeys.has(item.toLowerCase()));
+  async function createCategory() {
+    if (!customName.trim() || addingCustom) return;
+    setAddingCustom(true);
+    const created = await onAddCustomCategory(customName);
+    if (created) { setDraft({ ...draft, category: created }); setCustomName(""); setShowCustom(false); }
+    setAddingCustom(false);
+  }
+  return <form onSubmit={onSubmit}><h2>{editing ? "Edit expense" : "Add expense"}</h2><div className="amount-field"><span>₹</span><input autoFocus type="number" min="0.01" step="0.01" value={draft.amount || ""} onChange={(e) => setDraft({ ...draft, amount: Number(e.target.value) })} placeholder="0" required /></div><div className="quick-cats">{quickCategories.map((cat) => <button type="button" className={draft.category === cat ? "active" : ""} key={cat} onClick={() => setDraft({ ...draft, category: cat })}>{cat}</button>)}</div><div className="form-stack"><label>Category<select value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} required><option value="">Choose category</option>{customCategories.length > 0 && <optgroup label="Your categories">{customCategories.map((x) => <option key={x}>{x}</option>)}</optgroup>}<optgroup label="Standard categories">{standardCategories.map((x) => <option key={x}>{x}</option>)}</optgroup></select></label><button type="button" className="custom-category-toggle" onClick={() => setShowCustom((value) => !value)}>＋ Add your own category</button>{showCustom && <div className="custom-category-row"><input value={customName} onChange={(e) => setCustomName(e.target.value)} maxLength={80} placeholder="e.g. Inventory purchase" /><button type="button" disabled={addingCustom || !customName.trim()} onClick={() => void createCategory()}>{addingCustom ? "Adding…" : "Add"}</button></div>}<label>Description<input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Lunch, packaging, electricity…" /></label><label>Date<input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} required /></label><details><summary>More details</summary><div className="form-stack more-fields"><div className="form-two"><label>Payment<select value={draft.payment} onChange={(e) => setDraft({ ...draft, payment: e.target.value })}><option value="">Not set</option>{PAYMENT_METHODS.map((x) => <option key={x}>{x}</option>)}</select></label><label>Type<select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}><option value="">Not set</option><option>Essential</option><option>Discretionary</option><option>Business</option><option>One-time</option></select></label></div><label>Recurring<select value={draft.recurring} onChange={(e) => setDraft({ ...draft, recurring: e.target.value })}><option value="">No</option><option>Weekly</option><option>Monthly</option><option>Quarterly</option><option>Yearly</option></select></label><label>Note<textarea value={draft.extra} onChange={(e) => setDraft({ ...draft, extra: e.target.value })} placeholder="Optional note" /></label></div></details></div><button className="primary-save" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Add expense"}</button>{editing && <button type="button" className="danger-button" onClick={onDelete} disabled={busy}>Delete expense</button>}</form>;
 }
+
+function SavingForm({ draft, setDraft, editing, busy, onSubmit, onDelete, accountNames }: { draft: SavingDraft; setDraft: (d: SavingDraft) => void; editing: boolean; busy: boolean; onSubmit: (e: FormEvent) => void; onDelete: () => void; accountNames: string[] }) {
+  function changeAction(action: SavingAction) {
+    if (action === "opening" || action === "deposit") setDraft({ ...draft, action, fromAccount: "" });
+    else if (action === "withdrawal") setDraft({ ...draft, action, toAccount: "" });
+    else setDraft({ ...draft, action });
+  }
+  return <form onSubmit={onSubmit}><h2>{editing ? "Edit savings activity" : "Add savings activity"}</h2><p className="sheet-copy">Transfers between your own accounts do not increase total savings.</p><div className="saving-action-tabs">{(["deposit", "transfer", "withdrawal", "opening"] as SavingAction[]).map((action) => <button type="button" key={action} className={draft.action === action ? "active" : ""} onClick={() => changeAction(action)}>{action === "deposit" ? "Save" : action === "transfer" ? "Transfer" : action === "withdrawal" ? "Use" : "Opening"}</button>)}</div><div className="amount-field"><span>₹</span><input autoFocus type="number" min="0.01" step="0.01" value={draft.amount || ""} onChange={(e) => setDraft({ ...draft, amount: Number(e.target.value) })} placeholder="0" required /></div><div className="form-stack">{(draft.action === "withdrawal" || draft.action === "transfer") && <label>From account<input list="saving-account-names" value={draft.fromAccount} onChange={(e) => setDraft({ ...draft, fromAccount: e.target.value })} placeholder="e.g. HDFC Savings" required /></label>}{(draft.action === "opening" || draft.action === "deposit" || draft.action === "transfer") && <label>To account<input list="saving-account-names" value={draft.toAccount} onChange={(e) => setDraft({ ...draft, toAccount: e.target.value })} placeholder="e.g. Emergency Fund" required /></label>}<datalist id="saving-account-names">{accountNames.map((account) => <option key={account} value={account} />)}</datalist><div className="form-two"><label>Date<input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} required /></label><label>Method<select value={draft.method} onChange={(e) => setDraft({ ...draft, method: e.target.value })}><option value="">Not set</option>{SAVING_METHODS.map((method) => <option key={method}>{method}</option>)}</select></label></div><label>Note<textarea value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} placeholder="Optional note" /></label></div><button className="primary-save" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Add activity"}</button>{editing && <button type="button" className="danger-button" onClick={onDelete} disabled={busy}>Delete activity</button>}</form>;
+}
+
 function InvestmentForm({ draft, setDraft, editing, busy, onSubmit, onDelete }: { draft: InvestmentDraft; setDraft: (d: InvestmentDraft) => void; editing: boolean; busy: boolean; onSubmit: (e: FormEvent) => void; onDelete: () => void }) {
   return <form onSubmit={onSubmit}><h2>{editing ? "Edit investment" : "Add investment"}</h2><div className="form-stack sheet-form"><label>Name<input autoFocus value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Nifty SIP, HDFC FD…" required /></label><label>Type<select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })} required><option value="">Choose type</option>{INVESTMENT_TYPES.map((x) => <option key={x}>{x}</option>)}</select></label><div className="form-two"><label>Invested<input type="number" min="0.01" step="0.01" value={draft.invested || ""} onChange={(e) => setDraft({ ...draft, invested: Number(e.target.value) })} required /></label><label>Current value<input type="number" min="0.01" step="0.01" value={draft.current || ""} onChange={(e) => setDraft({ ...draft, current: Number(e.target.value) })} required /></label></div><label>Date<input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} required /></label><details><summary>More details</summary><div className="form-stack more-fields"><div className="form-two"><label>Frequency<select value={draft.frequency} onChange={(e) => setDraft({ ...draft, frequency: e.target.value })}><option value="">Not set</option><option>Monthly</option><option>Quarterly</option><option>Yearly</option><option>One-time</option></select></label><label>Rate / return<input type="number" step="0.01" value={draft.rate ?? ""} onChange={(e) => setDraft({ ...draft, rate: e.target.value === "" ? null : Number(e.target.value) })} placeholder="Optional" /></label></div><label>Platform / bank<input value={draft.platform} onChange={(e) => setDraft({ ...draft, platform: e.target.value })} placeholder="Optional" /></label><label>Maturity<input type="date" value={draft.maturity} onChange={(e) => setDraft({ ...draft, maturity: e.target.value })} /></label><label>Note<textarea value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} placeholder="Optional note" /></label></div></details></div><button className="primary-save" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Add investment"}</button>{editing && <button type="button" className="danger-button" onClick={onDelete} disabled={busy}>Delete investment</button>}</form>;
 }

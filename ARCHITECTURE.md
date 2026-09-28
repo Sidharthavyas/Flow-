@@ -15,22 +15,32 @@ No Google/OAuth provider is included.
 
 ## Data model
 
-- `User`
+- `User` — account, preferred money view, and private custom expense categories
 - `Session`
 - `Expense`
+- `Saving` — opening balances, deposits, withdrawals, and account-to-account transfers
 - `Investment`
 - `Budget`
 
 Money is stored in integer paise and converted to rupees at the API boundary.
 Dates used for personal finance grouping are stored as `YYYY-MM-DD` date keys to avoid timezone shifts.
 
+Savings are derived from activity rather than a manually maintained total:
+
+- Opening balance / deposit: adds to the destination account.
+- Withdrawal: subtracts from the source account.
+- Transfer: subtracts from one account and adds to another, so total savings stay unchanged.
+
 ## API
 
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
+- `GET/PATCH /api/preferences`
 - `GET/POST /api/expenses`
 - `PATCH/DELETE /api/expenses/:id`
+- `GET/POST /api/savings`
+- `PATCH/DELETE /api/savings/:id`
 - `GET/POST /api/investments`
 - `PATCH/DELETE /api/investments/:id`
 - `GET/PUT /api/budgets`
