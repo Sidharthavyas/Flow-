@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { budgetStreak, computeForecast, expenseInsights, investmentInsights, paceStatusLabel, previousPeriodStart, savingsInsights, type Forecast, type Insight } from "@/lib/insights";
+import { BUDGET_PRAISE, BUDGET_ROASTS, dailyNudge } from "@/lib/nudges";
 
 type Period = "week" | "month";
 type Page = "expenses" | "money";
@@ -25,6 +27,8 @@ type PaceSummary = {
   days: DayInfo[]; spent: number; remaining: number; expected: number; delta: number; recorded: DayInfo[];
   good: number; daily: number; projection: number; dayCount: number; isCurrent: boolean;
 };
+
+type Nudge = { tone: "roast" | "praise"; label: string; line: string };
 
 type ExpenseDraft = Omit<Expense, "id">;
 type InvestmentDraft = Omit<Investment, "id">;
@@ -133,6 +137,7 @@ export default function FlowDashboard({ user }: { user: User }) {
   const [period, setPeriod] = useState<Period>("month");
   const [anchor, setAnchor] = useState(() => new Date());
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [prevExpenses, setPrevExpenses] = useState<Expense[]>([]);
   const [investments, setInvestments] = useState<Investment[]>([]);
   const [savings, setSavings] = useState<Saving[]>([]);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
@@ -164,6 +169,7 @@ export default function FlowDashboard({ user }: { user: User }) {
   const start = useMemo(() => startOfPeriod(anchor, period), [anchor, period]);
   const end = useMemo(() => endOfPeriod(anchor, period), [anchor, period]);
   const startKey = localDateKey(start), endKey = localDateKey(end);
+  const prevStartKey = localDateKey(previousPeriodStart(start, period));
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -174,15 +180,17 @@ export default function FlowDashboard({ user }: { user: User }) {
   const loadExpenses = useCallback(async () => {
     setLoadingExpenses(true);
     try {
-      const [expenseResult, budgetResult] = await Promise.all([
+      const [expenseResult, budgetResult, prevResult] = await Promise.all([
         api<{ expenses: Expense[] }>(`/api/expenses?from=${startKey}&to=${endKey}`),
         api<{ budget: { amount: number } | null }>(`/api/budgets?periodType=${period}&periodStart=${startKey}`),
+        api<{ expenses: Expense[] }>(`/api/expenses?from=${prevStartKey}&to=${startKey}`).catch(() => ({ expenses: [] as Expense[] })),
       ]);
       setExpenses(expenseResult.expenses);
+      setPrevExpenses(prevResult.expenses);
       setBudget(budgetResult.budget?.amount ?? 0);
     } catch (e) { notify(e instanceof Error ? e.message : "Could not load expenses"); }
     finally { setLoadingExpenses(false); }
-  }, [startKey, endKey, period, notify]);
+  }, [startKey, endKey, prevStartKey, period, notify]);
 
   const refreshInvestments = useCallback(async () => {
     setLoadingInvestments(true);
@@ -250,6 +258,9 @@ export default function FlowDashboard({ user }: { user: User }) {
     return { days, spent, remaining: budget - spent, expected, delta: expected - spent, recorded, good, daily, projection, dayCount, isCurrent };
   }, [expenses, budget, start, end]);
 
+  const forecast = useMemo(() => computeForecast({ expenses, prevExpenses, budget, start, end, period }), [expenses, prevExpenses, budget, start, end, period]);
+  const smartExpenseInsights = useMemo(() => expenseInsights({ expenses, prevExpenses, forecast, budget, period, start, days: pace.days }), [expenses, prevExpenses, forecast, budget, period, start, pace.days]);
+
   const categories = useMemo(() => {
     const map = new Map<string, number>(); expenses.forEach((e) => map.set(e.category, (map.get(e.category) || 0) + e.amount));
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
@@ -300,6 +311,28 @@ export default function FlowDashboard({ user }: { user: User }) {
     transferred: periodSavings.filter((s) => s.action === "transfer").reduce((sum, s) => sum + s.amount, 0),
     openings: periodSavings.filter((s) => s.action === "opening").reduce((sum, s) => sum + s.amount, 0),
   }), [periodSavings]);
+  const monthlySpend = useMemo(() => {
+    const prevTotal = prevExpenses.reduce((a, e) => a + e.amount, 0), current = forecast.isPast ? forecast.spent : forecast.forecast;
+    const typical = prevTotal && current ? (prevTotal + current) / 2 : prevTotal || current;
+    return period === "month" ? typical : typical * 30.44 / 7;
+  }, [prevExpenses, forecast, period]);
+  const smartSavingsInsights = useMemo(() => savingsInsights({ savings, totalSavings, saved: savingStats.saved, used: savingStats.used, periodSpent: forecast.spent, monthlySpend, period }), [savings, totalSavings, savingStats, forecast.spent, monthlySpend, period]);
+  const smartInvestmentInsights = useMemo(() => investmentInsights({ investments }), [investments]);
+
+  const nudge = useMemo<Nudge | null>(() => {
+    if (!budget || !forecast.isCurrent || !expenses.length) return null;
+    const vars = { name: user.name.trim().split(/\s+/)[0] || "Boss", top: categories[0]?.[0] || "shopping", streak: "", over: "" };
+    let label = "";
+    if (forecast.status === "over") { label = `Budget crossed · ${money(forecast.spent - budget)} over`; vars.over = money(forecast.spent - budget); }
+    else if (forecast.forecast > budget) { label = `At this pace · ${money(forecast.forecast - budget)} over by period end`; vars.over = money(forecast.forecast - budget); }
+    else if (forecast.leftToday < 0) { label = `Today's allowance crossed · ${money(-forecast.leftToday)} over`; vars.over = money(-forecast.leftToday); }
+    if (label) return { tone: "roast", label, line: dailyNudge(BUDGET_ROASTS, user.id, vars) };
+    const streak = budgetStreak(pace.days, forecast.todayIndex);
+    if (streak < 3) return null;
+    vars.streak = String(streak);
+    return { tone: "praise", label: `${streak}-day streak within allowance`, line: dailyNudge(BUDGET_PRAISE, user.id, vars) };
+  }, [budget, forecast, expenses.length, user.name, user.id, categories, pace.days]);
+
   const filteredSavings = useMemo(() => {
     const query = savingSearch.trim().toLowerCase();
     return [...periodSavings].filter((saving) => {
@@ -425,13 +458,14 @@ export default function FlowDashboard({ user }: { user: User }) {
 
   const expenseInsight = useMemo(() => {
     if (!budget && !expenses.length) return "Set a budget or add an expense and Flow will show one useful action here.";
-    if (!budget) return `You’ve spent ${money(pace.spent)} this ${period}. Set a budget to unlock pace and daily allowance.`;
+    if (!budget) return forecast.isCurrent && expenses.length ? `You’ve spent ${money(pace.spent)} and are heading for about ${money(forecast.forecast)} this ${period}. Set a budget to unlock daily allowance and alerts.` : `You’ve spent ${money(pace.spent)} this ${period}. Set a budget to unlock pace and daily allowance.`;
     if (!pace.isCurrent) return pace.remaining >= 0 ? `You finished this period ${money(pace.remaining)} under budget.` : `This period ended ${money(Math.abs(pace.remaining))} over budget.`;
     if (pace.remaining < 0) return `You’re ${money(Math.abs(pace.remaining))} over budget. Keep the rest of this period intentionally light.`;
-    if (expenses.length && pace.projection > budget) return `At this pace you may finish about ${money(pace.projection - budget)} over budget. Aim for about ${money(pace.daily)} or less today.`;
-    if (expenses.length) return `You can spend about ${money(pace.daily)} per day from here and stay within budget.`;
-    return `Your current daily allowance is ${money(pace.daily)}. It will adjust automatically as you spend.`;
-  }, [budget, expenses.length, pace, period]);
+    if (forecast.runOutDate) return `At your recent ${money(forecast.dailyRate)}/day the budget runs out around ${longDate(forecast.runOutDate)}. Keep today under ${money(forecast.safeToday)} to push that out.`;
+    if (expenses.length && forecast.forecast > budget) return `You’re heading for about ${money(forecast.forecast - budget)} over budget. Spending ${money(forecast.safeToday)} or less a day lands you on budget.`;
+    if (expenses.length) return `You’re heading for ${money(forecast.forecast)} — about ${money(budget - forecast.forecast)} under budget. You can spend ${money(forecast.safeToday)} today.`;
+    return `Your current daily allowance is ${money(forecast.safeToday)}. It will adjust automatically as you spend.`;
+  }, [budget, expenses.length, pace, period, forecast]);
 
   const savingsInsight = useMemo(() => {
     if (!savings.length) return "Start with an opening balance, then record deposits, withdrawals and transfers. Transfers move money without increasing your total savings.";
@@ -489,19 +523,19 @@ export default function FlowDashboard({ user }: { user: User }) {
           </section>
 
           {page === "expenses" ? (
-            <ExpensesView loading={loadingExpenses} budget={budget} pace={pace} insight={expenseInsight} expenses={expenses} categories={categories}
+            <ExpensesView loading={loadingExpenses} budget={budget} pace={pace} forecast={forecast} smartInsights={smartExpenseInsights} nudge={nudge} insight={expenseInsight} expenses={expenses} categories={categories}
               filteredExpenses={filteredExpenses} pagedExpenses={pagedExpenses} selectedDay={selectedDay} period={period} anchor={anchor} start={start}
               setSheet={setSheet} setBudgetDraft={setBudgetDraft} onEdit={editExpense} onSelectDay={(day) => { setSelectedDay(day); setSheet("day"); }}
               categoryFilter={categoryFilter} onCategory={(cat) => { setCategoryFilter(cat); setSelectedDay(""); setRangeFilter(null); }}
               expenseSearch={expenseSearch} setExpenseSearch={setExpenseSearch} onRange={(range) => { setRangeFilter(range); setSelectedDay(""); setCategoryFilter(""); }}
               rangeFilter={rangeFilter} clearFilters={clearFilters} onAdd={() => openNew("expense")} page={expenseListPage} pages={expensePages} setPage={setExpenseListPage} />
           ) : moneyMode === "savings" ? (
-            <SavingsView loading={loadingSavings} total={totalSavings} stats={savingStats} insight={savingsInsight} accounts={savingAccounts}
+            <SavingsView loading={loadingSavings} total={totalSavings} stats={savingStats} insight={savingsInsight} smartInsights={smartSavingsInsights} accounts={savingAccounts}
               savings={periodSavings} filteredSavings={filteredSavings} pagedSavings={pagedSavings} accountFilter={savingAccountFilter} setAccountFilter={setSavingAccountFilter}
               search={savingSearch} setSearch={setSavingSearch} period={period} onEdit={editSaving} onAdd={() => openNew("saving")}
               page={savingListPage} pages={savingPages} setPage={setSavingListPage} />
           ) : (
-            <InvestmentsView loading={loadingInvestments} investments={filteredInvestments} allInvestments={investments} totals={investmentTotals}
+            <InvestmentsView loading={loadingInvestments} smartInsights={smartInvestmentInsights} investments={filteredInvestments} allInvestments={investments} totals={investmentTotals}
               search={investmentSearch} setSearch={setInvestmentSearch} onEdit={editInvestment} onAdd={() => openNew("investment")} />
           )}
         </main>
@@ -527,15 +561,16 @@ export default function FlowDashboard({ user }: { user: User }) {
 }
 
 function ExpensesView(props: {
-  loading: boolean; budget: number; pace: PaceSummary; insight: string; expenses: Expense[]; categories: [string, number][];
+  loading: boolean; budget: number; pace: PaceSummary; forecast: Forecast; smartInsights: Insight[]; nudge: Nudge | null; insight: string; expenses: Expense[]; categories: [string, number][];
   filteredExpenses: Expense[]; pagedExpenses: Expense[]; selectedDay: string; period: Period; anchor: Date; start: Date;
   setSheet: (s: SheetName) => void; setBudgetDraft: (v: number) => void; onEdit: (e: Expense) => void; onSelectDay: (d: string) => void;
   categoryFilter: string; onCategory: (cat: string) => void; expenseSearch: string; setExpenseSearch: (s: string) => void;
   onRange: (range: { from: string; to: string }) => void; rangeFilter: { from: string; to: string } | null; clearFilters: () => void; onAdd: () => void;
   page: number; pages: number; setPage: (page: number) => void;
 }) {
-  const { loading, budget, pace, insight, expenses, categories, filteredExpenses, pagedExpenses, selectedDay, period, anchor, start, setSheet, setBudgetDraft, onEdit, onSelectDay, categoryFilter, onCategory, expenseSearch, setExpenseSearch, onRange, rangeFilter, clearFilters, onAdd, page, pages, setPage } = props;
+  const { loading, budget, pace, forecast, smartInsights, nudge, insight, expenses, categories, filteredExpenses, pagedExpenses, selectedDay, period, anchor, start, setSheet, setBudgetDraft, onEdit, onSelectDay, categoryFilter, onCategory, expenseSearch, setExpenseSearch, onRange, rangeFilter, clearFilters, onAdd, page, pages, setPage } = props;
   const usedPct = budget ? Math.max(0, pace.spent / budget * 100) : 0;
+  const finish = forecast.isPast ? forecast.spent : forecast.forecast;
   const anyFilter = Boolean(selectedDay || categoryFilter || expenseSearch || rangeFilter);
   return <div className="page-enter">
     <div className="summary-grid">
@@ -547,19 +582,21 @@ function ExpensesView(props: {
         <div className="budget-footer"><span>{budget ? `${money(pace.spent)} of ${money(budget)} · ${Math.round(usedPct)}% used` : "No budget yet"}</span><button onClick={() => { setBudgetDraft(budget); setSheet("budget"); }}>{budget ? "Edit budget" : "Set budget"}</button></div>
       </section>
       <div className="stat-grid">
-        <Stat label="Today's allowance" value={budget ? money(pace.daily) : "—"} note={budget ? "Based on what remains" : "Set a budget first"} />
-        <Stat label="Budget pace" value={budget ? money(Math.abs(pace.delta)) : "—"} note={budget ? pace.delta >= 0 ? "ahead of budget pace" : "behind budget pace" : "Expected vs actual"} tone={budget ? pace.delta >= 0 ? "good" : "bad" : undefined} />
+        <Stat label="Today's allowance" value={budget ? money(forecast.safeToday) : "—"} note={!budget ? "Set a budget first" : !forecast.isCurrent ? "Average per day" : forecast.leftToday >= 0 ? `${money(forecast.leftToday)} left today` : `${money(-forecast.leftToday)} over today`} tone={budget && forecast.isCurrent && forecast.leftToday < 0 ? "bad" : undefined} />
+        <Stat label={forecast.isPast ? "Finished at" : "Forecast"} value={expenses.length ? money(finish) : "—"} note={!expenses.length ? "Add expenses to forecast" : !budget ? `by end of ${period}` : finish <= budget ? `${money(budget - finish)} under budget` : `${money(finish - budget)} over budget`} tone={budget && expenses.length ? finish <= budget ? "good" : "bad" : undefined} />
         <Stat label="Days on budget" value={pace.recorded.length ? `${pace.good}/${pace.recorded.length}` : "0"} note={pace.recorded.length ? "recorded days below allowance" : "No recorded days yet"} />
       </div>
     </div>
+    {nudge && <NudgeCard nudge={nudge} />}
     <div className="insight"><span>i</span><p>{insight}</p></div>
     <section className="section-block">
-      <SectionTitle title="Spending pace" note="Green shows your actual pace. Red marks the budget alert pace." />
+      <SectionTitle title="Spending pace" note="Spent so far, the budget pace line, and where you're heading." action={budget && expenses.length ? <span className={`pace-pill ${forecast.status}`}>{paceStatusLabel(forecast.status)}</span> : undefined} />
       <div className="card-surface chart-surface">
-        {loading ? <Skeleton height={180} /> : <PaceGraphic budget={budget} spent={pace.spent} expected={pace.expected} />}
-        {!!expenses.length && <ActivityChart expenses={expenses} period={period} start={start} onRange={onRange} />}
+        {loading ? <Skeleton height={180} /> : <PaceChart budget={budget} forecast={forecast} start={start} hasExpenses={expenses.length > 0} />}
+        {!!expenses.length && <ActivityChart expenses={expenses} period={period} start={start} budget={budget} dayCount={forecast.dayCount} todayIndex={forecast.todayIndex} onRange={onRange} />}
       </div>
     </section>
+    {!loading && smartInsights.length > 0 && <SmartInsights title="Flow noticed" note="Patterns from your spending this period." insights={smartInsights} />}
     <div className="two-column">
       <section className="section-block"><SectionTitle title="Calendar" note="Tap a day to see how it went." /><Calendar period={period} anchor={anchor} days={pace.days} selectedDay={selectedDay} onSelect={onSelectDay} /></section>
       <section className="section-block"><SectionTitle title="Categories" note="Where your money went." /><CategoryList categories={categories} total={pace.spent} active={categoryFilter} onSelect={onCategory} /></section>
@@ -574,8 +611,8 @@ function ExpensesView(props: {
   </div>;
 }
 
-function SavingsView({ loading, total, stats, insight, accounts, savings, filteredSavings, pagedSavings, accountFilter, setAccountFilter, search, setSearch, period, onEdit, onAdd, page, pages, setPage }: {
-  loading: boolean; total: number; stats: { saved: number; used: number; transferred: number; openings: number }; insight: string;
+function SavingsView({ loading, total, stats, insight, smartInsights, accounts, savings, filteredSavings, pagedSavings, accountFilter, setAccountFilter, search, setSearch, period, onEdit, onAdd, page, pages, setPage }: {
+  loading: boolean; total: number; stats: { saved: number; used: number; transferred: number; openings: number }; insight: string; smartInsights: Insight[];
   accounts: [string, number][]; savings: Saving[]; filteredSavings: Saving[]; pagedSavings: Saving[]; accountFilter: string; setAccountFilter: (value: string) => void;
   search: string; setSearch: (value: string) => void; period: Period; onEdit: (saving: Saving) => void; onAdd: () => void; page: number; pages: number; setPage: (page: number) => void;
 }) {
@@ -589,6 +626,7 @@ function SavingsView({ loading, total, stats, insight, accounts, savings, filter
       </div>
     </section>
     <div className="insight savings-insight"><span>i</span><p>{insight}</p></div>
+    {!loading && smartInsights.length > 0 && <SmartInsights title="Savings health" note="Emergency cover, savings rate and habits." insights={smartInsights} />}
     <div className="two-column investment-columns">
       <section className="section-block"><SectionTitle title="Savings accounts" note="Tap an account to filter this period's activity." /><AccountList accounts={accounts} total={total} active={accountFilter} onSelect={setAccountFilter} /></section>
       <section className="section-block"><SectionTitle title="This period" note="Transfers are tracked separately and stay neutral." /><div className="card-surface savings-summary">{loading ? <Skeleton height={150} /> : <><Stat label="Withdrawn / used" value={money(stats.used)} note="Money moved out of savings" /><Stat label="Account transfers" value={money(stats.transferred)} note="Moved between your accounts" /><Stat label="Opening balances" value={money(stats.openings)} note="Setup amounts, not new saving" /></>}</div></section>
@@ -603,9 +641,10 @@ function SavingsView({ loading, total, stats, insight, accounts, savings, filter
   </div>;
 }
 
-function InvestmentsView({ loading, investments, allInvestments, totals, search, setSearch, onEdit, onAdd }: { loading: boolean; investments: Investment[]; allInvestments: Investment[]; totals: { invested: number; current: number; gain: number }; search: string; setSearch: (s: string) => void; onEdit: (i: Investment) => void; onAdd: () => void }) {
+function InvestmentsView({ loading, smartInsights, investments, allInvestments, totals, search, setSearch, onEdit, onAdd }: { loading: boolean; smartInsights: Insight[]; investments: Investment[]; allInvestments: Investment[]; totals: { invested: number; current: number; gain: number }; search: string; setSearch: (s: string) => void; onEdit: (i: Investment) => void; onAdd: () => void }) {
   return <div className="page-enter">
     <section className="investment-hero card-surface"><div><p>Current value</p><h2>{money(totals.current)}</h2></div><div className="investment-mini"><Stat label="Invested" value={money(totals.invested)} note="Total principal" /><Stat label="Gain / loss" value={`${totals.gain >= 0 ? "+" : "−"}${money(Math.abs(totals.gain))}`} note="Current vs invested" tone={totals.gain >= 0 ? "good" : "bad"} /></div></section>
+    {!loading && smartInsights.length > 0 && <SmartInsights title="Portfolio check" note="Growth, concentration and maturities." insights={smartInsights} />}
     <div className="two-column investment-columns">
       <section className="section-block"><SectionTitle title="Allocation" note="Simple, not a trading dashboard." /><Allocation investments={allInvestments} total={totals.current} /></section>
       <section className="section-block"><SectionTitle title="Portfolio position" note="Invested vs current value." /><div className="card-surface portfolio-bars">{loading ? <Skeleton height={160} /> : <PortfolioBars invested={totals.invested} current={totals.current} />}</div></section>
@@ -626,18 +665,73 @@ function Pagination({ page, pages, setPage, label }: { page: number; pages: numb
   return <div className="pagination" aria-label={label}><button onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1} aria-label="Previous page">‹</button><span>Page <strong>{page}</strong> of {pages}</span><button onClick={() => setPage(Math.min(pages, page + 1))} disabled={page >= pages} aria-label="Next page">›</button></div>;
 }
 
-function PaceGraphic({ budget, spent, expected }: { budget: number; spent: number; expected: number }) {
-  if (!budget) return <div className="pace-empty"><div className="pace-empty-line"><i /><i /><i /></div><p>Set a budget to reveal your spending runway.</p></div>;
-  const actual = Math.min(100, spent / budget * 100), alert = Math.min(100, expected / budget * 100);
-  return <div className="runway-wrap"><div className="runway-scale"><span>₹0</span><span>{money(budget)}</span></div><div className="runway"><div className="runway-track" /><div className="runway-fill" style={{ width: `${actual}%` }} /><i className="runway-marker actual" style={{ left: `${actual}%` }} /><i className="runway-marker alert" style={{ left: `${alert}%` }} /></div><div className="runway-labels"><div><span className="positive">● Actual</span><strong>{money(spent)}</strong></div><div><span className="negative">● Alert pace</span><strong>{money(expected)}</strong></div></div></div>;
+function shortDay(date: Date) { return new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short" }).format(date); }
+
+function PaceChart({ budget, forecast: f, start, hasExpenses }: { budget: number; forecast: Forecast; start: Date; hasExpenses: boolean }) {
+  if (!hasExpenses) return <div className="pace-empty"><div className="pace-empty-line"><i /><i /><i /></div><p>{budget ? `Add an expense and Flow will chart your pace against ${money(budget)}.` : "Set a budget to reveal your spending runway."}</p></div>;
+  const n = f.dayCount, last = f.cumulative.length - 1, finish = f.isPast ? f.spent : f.forecast;
+  const top = Math.max(budget, f.forecastHigh, f.spent, 1) * 1.12;
+  const X = (i: number) => (i + 1) / n * 100, Y = (v: number) => 100 - v / top * 100;
+  const actual = `M0 100 ${f.cumulative.map((v, i) => `L${X(i)} ${Y(v)}`).join(" ")}`;
+  const ideal = `M0 100 ${f.ideal.map((v, i) => `L${X(i)} ${Y(v)}`).join(" ")}`;
+  const x0 = last >= 0 ? X(last) : 0, y0 = last >= 0 ? Y(f.cumulative[last]) : 100;
+  const showForecast = !f.isPast && x0 < 100;
+  const tone = budget && f.delta < 0 ? "over" : "good";
+  const lastDay = new Date(start); lastDay.setDate(start.getDate() + n - 1);
+  return <div className="pace-chart-wrap">
+    <div className={`pace-chart ${tone}`}>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        {[25, 50, 75].map((g) => <line key={g} className="pace-grid" x1="0" x2="100" y1={g} y2={g} />)}
+        {budget > 0 && <line className="pace-budget" x1="0" x2="100" y1={Y(budget)} y2={Y(budget)} />}
+        {showForecast && <path className="pace-band" d={`M${x0} ${y0} L100 ${Y(f.forecastHigh)} L100 ${Y(f.forecastLow)} Z`} />}
+        {budget > 0 && <path className="pace-ideal" d={ideal} />}
+        {last >= 0 && <path className="pace-area" d={`${actual} L${x0} 100 Z`} />}
+        {last >= 0 && <path className="pace-actual" d={actual} />}
+        {showForecast && <path className="pace-forecast" d={`M${x0} ${y0} L100 ${Y(f.forecast)}`} />}
+      </svg>
+      {budget > 0 && <span className="pace-budget-label" style={{ top: `${Y(budget)}%` }}>Budget {money(budget)}</span>}
+      {last >= 0 && <i className="pace-dot now" style={{ left: `${x0}%`, top: `${y0}%` }} />}
+      {showForecast && <i className="pace-dot end" style={{ left: "100%", top: `${Y(f.forecast)}%` }} />}
+    </div>
+    <div className="pace-axis"><span>{shortDay(start)}</span>{f.isCurrent && x0 > 22 && x0 < 78 && <span className="pace-today" style={{ left: `${x0}%` }}>Today</span>}<span>{shortDay(lastDay)}</span></div>
+    <div className="pace-legend">
+      <div><span className={tone === "over" ? "negative" : "positive"}>● Spent</span><strong>{money(f.spent)}</strong></div>
+      {budget > 0 && <div><span className="legend-muted">● Budget pace</span><strong>{money(f.isPast ? budget : f.expectedToday)}</strong></div>}
+      <div><span className="legend-accent">● {f.isPast ? "Finished" : "Forecast"}</span><strong>{money(finish)}</strong></div>
+    </div>
+  </div>;
 }
 
-function ActivityChart({ expenses, period, start, onRange }: { expenses: Expense[]; period: Period; start: Date; onRange: (range: { from: string; to: string }) => void }) {
-  const labels = period === "week" ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] : ["W1", "W2", "W3", "W4", "W5"];
-  const values = Array(labels.length).fill(0) as number[];
-  expenses.forEach((e) => { const d = dateFromKey(e.date); const i = period === "week" ? (d.getDay() + 6) % 7 : Math.min(4, Math.floor((d.getDate() - 1) / 7)); values[i] += e.amount; });
-  const max = Math.max(...values, 1);
-  return <div className="activity-wrap"><div className="activity-label-title">Activity</div><div className="activity-chart">{labels.map((label, i) => <button key={label} className="activity-col" onClick={() => { const from = new Date(start), to = new Date(start); if (period === "week") { from.setDate(start.getDate() + i); to.setDate(from.getDate() + 1); } else { from.setDate(1 + i * 7); const monthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 1); to.setDate(1 + (i + 1) * 7); if (to > monthEnd) to.setFullYear(monthEnd.getFullYear(), monthEnd.getMonth(), monthEnd.getDate()); } onRange({ from: localDateKey(from), to: localDateKey(to) }); document.getElementById("recent-expenses")?.scrollIntoView({ behavior: "smooth" }); }}><span className="activity-value">{values[i] ? money(values[i]) : ""}</span><span className="activity-bar" style={{ height: `${Math.max(4, values[i] / max * 100)}%` }} /><small>{label}</small></button>)}</div></div>;
+function ActivityChart({ expenses, period, start, budget, dayCount, todayIndex, onRange }: { expenses: Expense[]; period: Period; start: Date; budget: number; dayCount: number; todayIndex: number; onRange: (range: { from: string; to: string }) => void }) {
+  const buckets = period === "week"
+    ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label, i) => ({ label, from: i, to: i + 1 }))
+    : [0, 1, 2, 3, 4].map((i) => ({ label: `W${i + 1}`, from: i * 7, to: Math.min(dayCount, i * 7 + 7) })).filter((b) => b.to > b.from);
+  const values = buckets.map(() => 0);
+  expenses.forEach((e) => { const d = dateFromKey(e.date); const i = period === "week" ? (d.getDay() + 6) % 7 : Math.min(buckets.length - 1, Math.floor((d.getDate() - 1) / 7)); values[i] += e.amount; });
+  const allowed = buckets.map((b) => budget ? budget * (b.to - b.from) / dayCount : 0);
+  const max = Math.max(...values, ...allowed, 1) * 1.18;
+  return <div className="activity-wrap"><div className="activity-label-title">Activity{budget ? " · ticks mark each slice's share of budget" : ""}</div><div className="activity-chart">{buckets.map((bucket, i) => {
+    const state = todayIndex < 0 || bucket.from > todayIndex ? "future" : todayIndex < bucket.to && todayIndex < dayCount - 1 ? "current" : "";
+    const over = budget > 0 && values[i] > allowed[i];
+    return <button key={bucket.label} className={`activity-col ${state}`} onClick={() => { const from = new Date(start), to = new Date(start); from.setDate(start.getDate() + bucket.from); to.setDate(start.getDate() + bucket.to); onRange({ from: localDateKey(from), to: localDateKey(to) }); document.getElementById("recent-expenses")?.scrollIntoView({ behavior: "smooth" }); }}>
+      <span className="activity-value">{values[i] ? money(values[i]) : ""}</span>
+      <span className={`activity-bar ${over ? "over" : ""}`} style={{ height: `${Math.max(4, values[i] / max * 100)}%` }} />
+      {budget > 0 && <i className="activity-limit" style={{ bottom: `${allowed[i] / max * 100}%` }} />}
+      <small>{bucket.label}</small>
+    </button>;
+  })}</div></div>;
+}
+
+function NudgeCard({ nudge }: { nudge: Nudge }) {
+  return <div className={`nudge ${nudge.tone}`} role="status"><span>{nudge.tone === "roast" ? "🔥" : "🏆"}</span><div><small>{nudge.label}</small><p>{nudge.line}</p></div></div>;
+}
+
+function SmartInsights({ title, note, insights }: { title: string; note: string; insights: Insight[] }) {
+  const [open, setOpen] = useState(false);
+  const shown = open ? insights : insights.slice(0, 3);
+  return <section className="section-block"><SectionTitle title={title} note={note} action={insights.length > 3 ? <button onClick={() => setOpen(!open)}>{open ? "Show less" : `+${insights.length - 3} more`}</button> : undefined} />
+    <div className="list-card">{shown.map((insight) => <div className="smart-row" key={insight.id}><span className={`row-icon smart-icon ${insight.tone}`}>{insight.icon}</span><span className="row-main"><strong>{insight.title}</strong><small>{insight.detail}</small></span></div>)}</div>
+  </section>;
 }
 
 function Calendar({ period, anchor, days, selectedDay, onSelect }: { period: Period; anchor: Date; days: DayInfo[]; selectedDay: string; onSelect: (day: string) => void }) {
