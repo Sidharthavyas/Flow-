@@ -1,0 +1,2 @@
+# Vercel only needs the Next.js app. The Android project (with its local build tools and signing key) stays out.
+android

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome "F" for the status bar; Android tints it, so only the shape matters. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="72"
+    android:viewportHeight="72">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M20,12L54,12L54,22L31,22L31,32L50,32L50,42L31,42L31,60L20,60Z" />
+</vector>

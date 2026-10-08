@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Flow</string>
+    <string name="download_started">Export is downloading to your Downloads folder.</string>
+    <string name="download_permission_denied">Storage permission is needed to save exports on this Android version.</string>
+    <string name="no_browser">No app is available to open this link.</string>
+    <string name="nudge_channel_name">Daily budget nudge</string>
+    <string name="nudge_channel_description">Roasts at 1 PM and 9 PM when you cross your budget, or praise when you stay on track.</string>
+    <string name="sms_channel_name">Payments from bank SMS</string>
+    <string name="sms_channel_description">Payments Flow added from your bank SMS, with one-tap buttons to say what they were.</string>
+    <string name="sms_permission_settings">Allow SMS for Flow in Android Settings → Apps → Flow → Permissions.</string>
+</resources>
