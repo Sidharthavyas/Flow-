@@ -6,6 +6,7 @@ import { dbConnect } from "@/lib/db";
 import { jsonError } from "@/lib/http";
 import { computeForecast, keyOf, previousPeriodStart, type Period } from "@/lib/insights";
 import { paiseToRupees } from "@/lib/money";
+import { displayAddress } from "@/lib/nudges";
 import { serializeExpense } from "@/lib/serializers";
 import { Budget } from "@/models/Budget";
 import { Expense } from "@/models/Expense";
@@ -30,6 +31,8 @@ export async function GET(request: NextRequest) {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
     await dbConnect();
+    const prefs = await User.findById(user.id).select("nickname roastsEnabled").lean();
+    if (prefs?.roastsEnabled === false) return NextResponse.json(quiet, { headers: { "Cache-Control": "private, no-store" } });
     const budgets = await Budget.find({ userId: user.id, $or: [
       { periodType: "month", periodStart: keyOf(monthStart) },
       { periodType: "week", periodStart: keyOf(weekStart) },
@@ -47,7 +50,7 @@ export async function GET(request: NextRequest) {
     const expenses = all.filter((e) => e.date >= startKey), prevExpenses = all.filter((e) => e.date < startKey);
 
     const forecast = computeForecast({ expenses, prevExpenses, budget, start, end, period, now });
-    const address = String((await User.findById(user.id).select("roastAddress").lean())?.roastAddress ?? "yaar");
+    const address = displayAddress(prefs?.nickname, user.name);
     const byCategory = new Map<string, number>();
     expenses.forEach((e) => byCategory.set(e.category, (byCategory.get(e.category) || 0) + e.amount));
     const topCategory = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
@@ -66,7 +69,7 @@ export async function GET(request: NextRequest) {
       else {
         const todaySpent = forecast.isCurrent ? forecast.spentToday : 0;
         const line = await aiRoast({
-          level: nudge.level, situation: nudge.label, addressAs: address, period, budget: `₹${budget}`, spentSoFar: `₹${Math.round(forecast.spent)}`,
+          level: nudge.level, situation: nudge.label, addressAs: String(prefs?.nickname ?? "").trim() || undefined, period, budget: `₹${budget}`, spentSoFar: `₹${Math.round(forecast.spent)}`,
           forecastByPeriodEnd: `₹${Math.round(forecast.forecast)}`, spentToday: `₹${Math.round(todaySpent)}`,
           biggestCategory: topCategory ? `${topCategory} (₹${Math.round(byCategory.get(topCategory) ?? 0)})` : undefined,
           daysLeft: forecast.dayCount - forecast.elapsed, timeOfDay: slot === "afternoon" ? "afternoon" : "evening",

@@ -11,12 +11,12 @@ export async function GET() {
   try {
     const user = await requireApiUser();
     await dbConnect();
-    const doc = await User.findById(user.id).select("moneyMode customExpenseCategories roastAddress").lean();
+    const doc = await User.findById(user.id).select("moneyMode customExpenseCategories roastsEnabled").lean();
     if (!doc) return jsonError("Unauthorized", 401);
     return NextResponse.json({
       moneyMode: doc.moneyMode === "savings" || doc.moneyMode === "investments" ? doc.moneyMode : null,
       customExpenseCategories: Array.isArray(doc.customExpenseCategories) ? doc.customExpenseCategories.map(String) : [],
-      roastAddress: doc.roastAddress === "bhai" || doc.roastAddress === "behen" ? doc.roastAddress : "yaar",
+      roastsEnabled: doc.roastsEnabled !== false,
     });
   } catch (e) {
     if (e instanceof Error && e.message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
@@ -33,7 +33,7 @@ export async function PATCH(request: NextRequest) {
 
     const update: Record<string, unknown> = {};
     if (parsed.data.moneyMode) update.moneyMode = parsed.data.moneyMode;
-    if (parsed.data.roastAddress) update.roastAddress = parsed.data.roastAddress;
+    if (parsed.data.roastsEnabled !== undefined) update.roastsEnabled = parsed.data.roastsEnabled;
     if (parsed.data.customExpenseCategories) {
       const seen = new Set<string>();
       update.customExpenseCategories = parsed.data.customExpenseCategories
@@ -48,12 +48,12 @@ export async function PATCH(request: NextRequest) {
     }
 
     await dbConnect();
-    const doc = await User.findByIdAndUpdate(user.id, update, { new: true, runValidators: true }).select("moneyMode customExpenseCategories roastAddress").lean();
+    const doc = await User.findByIdAndUpdate(user.id, update, { new: true, runValidators: true }).select("moneyMode customExpenseCategories roastsEnabled").lean();
     if (!doc) return jsonError("Unauthorized", 401);
     return NextResponse.json({
       moneyMode: doc.moneyMode === "savings" || doc.moneyMode === "investments" ? doc.moneyMode : null,
       customExpenseCategories: Array.isArray(doc.customExpenseCategories) ? doc.customExpenseCategories.map(String) : [],
-      roastAddress: doc.roastAddress === "bhai" || doc.roastAddress === "behen" ? doc.roastAddress : "yaar",
+      roastsEnabled: doc.roastsEnabled !== false,
     });
   } catch (e) {
     if (e instanceof Error && e.message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

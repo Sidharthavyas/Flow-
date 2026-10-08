@@ -1,3 +1,27 @@
+# Flow update — Recovery codes and admin reset links
+
+- Forgot password now uses a **recovery code** (Profile → Security → Recovery code). Enter email + code + new password; the used code is replaced with a new one. 5 wrong tries lock recovery for 15 minutes.
+- **Admin reset link** (Profile → Admin, only for emails in `ADMIN_EMAILS`): make a one-time 24-hour link for someone who lost their code, and send it on WhatsApp.
+- Email reset (Resend) is kept but hidden. Turn it back on with `PASSWORD_RESET_EMAIL=on` once `EMAIL_FROM` uses a verified domain.
+- New routes: `/api/auth/recover`, `/api/account/recovery-code`, `/api/admin/reset-link`.
+
+# Flow update — Password reset and a real Profile
+
+## Added
+
+- Forgot password: "Forgot password?" on sign-in → email link (30 min, one-time use) → choose a new password. Resetting signs out every device. Needs `RESEND_API_KEY` + `EMAIL_FROM` on Vercel.
+- Profile sheet with sections: About you (edit name, choose what Flow calls you), Preferences (roasts on/off, Savings/Investments tab, remove custom categories), Security (change password, change email, sign out of other devices), Your data (CSV export, delete account).
+- New API routes: `/api/auth/forgot`, `/api/auth/reset`, `/api/account` (PATCH profile, DELETE account), `/api/account/password`, `/api/account/email`, `/api/account/sessions`.
+- New model `models/PasswordReset.ts` (only token hashes are stored; documents auto-expire).
+
+## Changed
+
+- Removed the Bhai / Yaar / Behen picker. Flow now uses your nickname, or your first name if you leave it blank, in greetings, roasts and reminders.
+- AI roasts only get a nickname you chose yourself, never your real name. With no nickname the AI is told not to use bhai/yaar/behen.
+- With roasts turned off, there are no roast pop-ups or overspend notifications. Praise and insights still show.
+
+No manual MongoDB migration is needed.
+
 # Flow update — Savings, cleaner expenses, and personalization
 
 ## Added

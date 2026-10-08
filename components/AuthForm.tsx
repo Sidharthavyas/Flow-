@@ -41,6 +41,7 @@ export default function AuthForm({ mode }: { mode: "login" | "register" }) {
           {mode === "register" && <label>Name<input name="name" autoComplete="name" required minLength={2} maxLength={80} /></label>}
           <label>Email<input name="email" type="email" autoComplete="email" required /></label>
           <label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={mode === "register" ? 8 : 1} /></label>
+          {mode === "login" && <Link className="auth-forgot" href="/forgot-password">Forgot password?</Link>}
           {error && <div className="auth-error" role="alert">{error}</div>}
           <button className="auth-submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}</button>
         </form>

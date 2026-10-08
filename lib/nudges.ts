@@ -1,16 +1,18 @@
 // Flow's personality: a witty Indian friend who knows exactly where your money went and says so.
 // One line per day of the year, rotated per user so a whole year passes without a repeat.
 // Placeholders: {name} first name, {top} biggest category, {over} amount over the limit (roasts only),
-// {streak} days within allowance (praise only), {bro}/{Bro} how Flow addresses the user (Bhai / Behen / Yaar).
+// {streak} days within allowance (praise only), {bro}/{Bro} what Flow calls the user (their nickname, else first name).
 // Lines are written gender-neutral: the user is never the subject of a gendered verb (no "tu kar raha/rahi hai");
 // use imperatives, "tune … kiya", or make the wallet / expense / Flow the subject instead.
 
-export type RoastAddress = "yaar" | "bhai" | "behen";
-export const ROAST_ADDRESSES: RoastAddress[] = ["yaar", "bhai", "behen"];
+/** What Flow calls the user: the nickname they chose in their profile, otherwise their first name. */
+export function displayAddress(nickname?: string | null, name?: string | null) {
+  return (nickname ?? "").trim() || (name ?? "").trim().split(/\s+/)[0] || "Boss";
+}
 
-/** {bro} and {Bro} for the user's chosen form of address; "yaar" is the neutral default. */
+/** {bro} and {Bro} for the user's form of address (see displayAddress). */
 export function addressVars(address?: string | null) {
-  const word = address === "bhai" || address === "behen" ? address : "yaar";
+  const word = (address ?? "").trim() || "Boss";
   return { bro: word, Bro: word[0].toUpperCase() + word.slice(1) };
 }
 

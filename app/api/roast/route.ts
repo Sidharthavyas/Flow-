@@ -29,7 +29,10 @@ export async function POST(request: NextRequest) {
     const parsed = roastSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid roast request");
     await dbConnect();
-    const address = String((await User.findById(user.id).select("roastAddress").lean())?.roastAddress ?? "yaar");
+    const prefs = await User.findById(user.id).select("nickname roastsEnabled").lean();
+    if (prefs?.roastsEnabled === false) return NextResponse.json({ line: null }, { headers: { "Cache-Control": "private, no-store" } });
+    // Only a nickname the user chose goes to the AI provider, never their real name.
+    const address = String(prefs?.nickname ?? "").trim() || undefined;
     const f = parsed.data, rupees = (v?: number) => (v === undefined ? undefined : `₹${Math.round(v)}`);
     const line = await aiRoast({
       level: f.level, addressAs: address, situation: `Just added an expense — ${f.situation}`, amount: rupees(f.amount), category: f.category,

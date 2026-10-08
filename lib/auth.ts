@@ -8,7 +8,7 @@ import { User } from "@/models/User";
 const COOKIE = "flow_session";
 const SESSION_DAYS = 30;
 
-function hashToken(token: string) {
+export function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -43,6 +43,14 @@ export async function destroySession() {
   });
 }
 
+/** Signs the user out everywhere except the device making this request. Returns how many sessions ended. */
+export async function destroyOtherSessions(userId: string) {
+  const token = (await cookies()).get(COOKIE)?.value;
+  await dbConnect();
+  const result = await Session.deleteMany({ userId, ...(token ? { tokenHash: { $ne: hashToken(token) } } : {}) });
+  return result.deletedCount ?? 0;
+}
+
 export async function getCurrentUser() {
   const store = await cookies();
   const token = store.get(COOKIE)?.value;
@@ -50,9 +58,9 @@ export async function getCurrentUser() {
   await dbConnect();
   const session = await Session.findOne({ tokenHash: hashToken(token), expiresAt: { $gt: new Date() } }).lean();
   if (!session) return null;
-  const user = await User.findById(session.userId).select("name email").lean();
+  const user = await User.findById(session.userId).select("name email nickname").lean();
   if (!user) return null;
-  return { id: String(user._id), name: String(user.name), email: String(user.email) };
+  return { id: String(user._id), name: String(user.name), email: String(user.email), nickname: String(user.nickname ?? "") };
 }
 
 export async function requireUser() {

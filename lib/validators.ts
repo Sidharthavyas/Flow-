@@ -9,6 +9,50 @@ export const registerSchema = z.object({
   password: z.string().min(8).max(128),
 });
 
+const newPassword = z.string().min(8, "Password must be at least 8 characters").max(128);
+
+export const forgotPasswordSchema = z.object({
+  email: z.email().trim().toLowerCase().max(254),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(20).max(200),
+  password: newPassword,
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword,
+});
+
+export const changeEmailSchema = z.object({
+  email: z.email().trim().toLowerCase().max(254),
+  password: z.string().min(1).max(128),
+});
+
+export const profileSchema = z.object({
+  name: z.string().trim().min(2, "Name must be at least 2 characters").max(80).optional(),
+  nickname: z.string().trim().max(30).optional(),
+}).refine((data) => data.name !== undefined || data.nickname !== undefined, { message: "No profile changes supplied" });
+
+export const deleteAccountSchema = z.object({
+  password: z.string().min(1).max(128),
+});
+
+export const recoverWithCodeSchema = z.object({
+  email: z.email().trim().toLowerCase().max(254),
+  code: z.string().trim().min(8).max(40),
+  password: newPassword,
+});
+
+export const createRecoveryCodeSchema = z.object({
+  password: z.string().min(1).max(128),
+});
+
+export const adminResetLinkSchema = z.object({
+  email: z.email().trim().toLowerCase().max(254),
+});
+
 export const loginSchema = z.object({
   email: z.email().trim().toLowerCase().max(254),
   password: z.string().min(1).max(128),
@@ -64,8 +108,8 @@ export const savingSchema = z.object({
 export const preferencesSchema = z.object({
   moneyMode: z.enum(["savings", "investments"]).optional(),
   customExpenseCategories: z.array(z.string().trim().min(1).max(80)).max(40).optional(),
-  roastAddress: z.enum(["yaar", "bhai", "behen"]).optional(),
-}).refine((data) => data.moneyMode !== undefined || data.customExpenseCategories !== undefined || data.roastAddress !== undefined, { message: "No preference changes supplied" });
+  roastsEnabled: z.boolean().optional(),
+}).refine((data) => data.moneyMode !== undefined || data.customExpenseCategories !== undefined || data.roastsEnabled !== undefined, { message: "No preference changes supplied" });
 
 export const budgetSchema = z.object({
   periodType: z.enum(["week", "month"]),
