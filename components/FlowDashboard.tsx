@@ -6,6 +6,7 @@ import { budgetNudge, type BudgetNudge as Nudge } from "@/lib/budget-nudge";
 import { expenseRoast, typicalSpend, type ExpenseRoast } from "@/lib/expense-roast";
 import { displayAddress } from "@/lib/nudges";
 import ProfileSheet from "@/components/ProfileSheet";
+import SmsReviewCard from "@/components/SmsReviewCard";
 import { api } from "@/lib/api-client";
 
 type Period = "week" | "month";
@@ -17,6 +18,7 @@ type User = { id: string; name: string; email: string; nickname: string; isAdmin
 type Expense = {
   id: string; amount: number; category: string; date: string; name: string; payment: string;
   type: string; recurring: string; extra: string;
+  source?: "sms"; payee?: string; account?: string; needsReview?: boolean;
 };
 type Investment = {
   id: string; name: string; type: string; invested: number; current: number; date: string;
@@ -577,6 +579,7 @@ export default function FlowDashboard({ user: initialUser }: { user: User }) {
             </div>}
           </section>
 
+          {page === "expenses" && <SmsReviewCard onChanged={loadExpenses} notify={notify} />}
           {page === "expenses" ? (
             <ExpensesView loading={loadingExpenses} budget={budget} pace={pace} forecast={forecast} smartInsights={smartExpenseInsights} nudge={shownNudge} insight={expenseInsight} expenses={expenses} categories={categories}
               filteredExpenses={filteredExpenses} pagedExpenses={pagedExpenses} selectedDay={selectedDay} period={period} anchor={anchor} start={start}

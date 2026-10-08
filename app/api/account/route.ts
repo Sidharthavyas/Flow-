@@ -8,6 +8,7 @@ import { Budget } from "@/models/Budget";
 import { Expense } from "@/models/Expense";
 import { Investment } from "@/models/Investment";
 import { PasswordReset } from "@/models/PasswordReset";
+import { PayeeRule } from "@/models/PayeeRule";
 import { RoastCache } from "@/models/RoastCache";
 import { Saving } from "@/models/Saving";
 import { Session } from "@/models/Session";
@@ -45,7 +46,7 @@ export async function DELETE(request: NextRequest) {
     const doc = await User.findById(user.id).select("+passwordHash");
     if (!doc || !(await compare(parsed.data.password, doc.passwordHash))) return jsonError("That password isn't right", 403);
     const userId = doc._id;
-    await Promise.all([Expense, Investment, Saving, Budget, RoastCache, PasswordReset].map((m) => m.deleteMany({ userId })));
+    await Promise.all([Expense, Investment, Saving, Budget, RoastCache, PasswordReset, PayeeRule].map((m) => m.deleteMany({ userId })));
     await destroySession();
     await Promise.all([Session.deleteMany({ userId }), User.deleteOne({ _id: userId })]);
     return NextResponse.json({ ok: true });

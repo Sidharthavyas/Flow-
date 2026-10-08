@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import RecoveryCodeCard from "@/components/RecoveryCodeCard";
+import SmsSettings from "@/components/SmsSettings";
 import { api } from "@/lib/api-client";
 import { displayAddress } from "@/lib/nudges";
 
@@ -162,6 +163,8 @@ export default function ProfileSheet(props: {
         </div>
       </div>}
     </section>
+
+    <SmsSettings notify={notify} />
 
     <section className="profile-section">
       <h3>Security</h3>

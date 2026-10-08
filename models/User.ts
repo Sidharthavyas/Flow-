@@ -20,6 +20,11 @@ const UserSchema = new Schema(
     recoveryCodeCreatedAt: { type: Date, default: undefined },
     recoveryFailures: { type: Number, default: 0, select: false },
     recoveryLockedUntil: { type: Date, default: undefined, select: false },
+    // Bank accounts/cards seen in SMS ("BOI ••0457"); switching one off stops auto-adding from it.
+    smsAccounts: {
+      type: [{ label: { type: String, maxlength: 40 }, enabled: { type: Boolean, default: true }, lastSeenAt: Date, _id: false }],
+      default: [],
+    },
   },
   { timestamps: true }
 );

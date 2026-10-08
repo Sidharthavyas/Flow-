@@ -5,6 +5,7 @@ import { dbConnect } from "@/lib/db";
 import { isTrustedOrigin, jsonError } from "@/lib/http";
 import { rupeesToPaise } from "@/lib/money";
 import { serializeExpense } from "@/lib/serializers";
+import { rememberPayee } from "@/lib/sms/ingest";
 import { expenseSchema } from "@/lib/validators";
 import { Expense } from "@/models/Expense";
 
@@ -26,11 +27,13 @@ export async function PATCH(request: NextRequest, context: Context) {
       {
         amountPaise: rupeesToPaise(parsed.data.amount), category: parsed.data.category, dateKey: parsed.data.date,
         name: parsed.data.name, payment: parsed.data.payment, type: parsed.data.type,
-        recurring: parsed.data.recurring, extra: parsed.data.extra,
+        recurring: parsed.data.recurring, extra: parsed.data.extra, needsReview: false,
       },
       { new: true, runValidators: true }
     ).lean();
     if (!doc) return jsonError("Not found", 404);
+    // Correcting an SMS-added expense teaches Flow that payee for next time.
+    if (doc.source === "sms" && doc.payee) await rememberPayee({ userId: user.id, payee: String(doc.payee), amount: parsed.data.amount, kind: "expense", category: parsed.data.category });
     return NextResponse.json({ expense: serializeExpense(doc as never) });
   } catch (e) {
     if (e instanceof Error && e.message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

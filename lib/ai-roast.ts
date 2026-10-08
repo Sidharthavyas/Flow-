@@ -54,6 +54,13 @@ export function aiRoastEnabled() {
 }
 
 export async function aiRoast(facts: RoastFacts, timeoutMs = 4000): Promise<string | null> {
+  // Generous ceiling so models that reason before answering still have room for the one-liner.
+  const text = await aiChat(SYSTEM_PROMPT, `Roast me based on these facts:\n${describe(facts)}`, { maxTokens: 400, temperature: 1, timeoutMs, label: "roast" });
+  return clean(text);
+}
+
+/** One chat completion with the configured provider. Returns the raw reply, or null when AI is off or fails. */
+export async function aiChat(system: string, user: string, { maxTokens = 400, temperature = 0.2, timeoutMs = 4000, label = "chat" } = {}): Promise<string | null> {
   const settings = config();
   if (!settings) return null;
   const controller = new AbortController();
@@ -63,20 +70,20 @@ export async function aiRoast(facts: RoastFacts, timeoutMs = 4000): Promise<stri
       method: "POST", signal: controller.signal,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` },
       body: JSON.stringify({
-        model: settings.model,
-        // Generous ceiling so models that reason before answering still have room for the one-liner.
-        max_tokens: 400, temperature: 1,
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: `Roast me based on these facts:\n${describe(facts)}` }],
+        model: settings.model, max_tokens: maxTokens, temperature,
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
       }),
     });
     if (!response.ok) {
-      console.warn(`AI roast failed: ${response.status} ${(await response.text().catch(() => "")).slice(0, 200)}`);
+      console.warn(`AI ${label} failed: ${response.status} ${(await response.text().catch(() => "")).slice(0, 200)}`);
       return null;
     }
     const data = await response.json() as { choices?: { message?: { content?: string } }[] };
-    return clean(data.choices?.[0]?.message?.content);
+    const content = data.choices?.[0]?.message?.content;
+    // Some models wrap output in reasoning tags; keep only the final answer.
+    return content ? content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim() : null;
   } catch {
-    return null; // timeout, network, or bad response: caller falls back to built-in lines
+    return null; // timeout, network, or bad response: callers fall back to built-in behaviour
   } finally {
     clearTimeout(timer);
   }

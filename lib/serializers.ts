@@ -11,6 +11,7 @@ export function serializeExpense(doc: Record<string, unknown>) {
     type: String(doc.type ?? ""),
     recurring: String(doc.recurring ?? ""),
     extra: String(doc.extra ?? ""),
+    ...(doc.source === "sms" ? { source: "sms", payee: String(doc.payee ?? ""), account: String(doc.account ?? ""), needsReview: Boolean(doc.needsReview) } : {}),
   };
 }
 

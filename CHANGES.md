@@ -1,3 +1,13 @@
+# Flow update — Auto-add expenses from bank SMS (needs app v1.3.0)
+
+- Android app 1.3.0 forwards new bank transaction SMS (bank sender IDs only; balances removed on the phone, OTPs ignored).
+- One general reader for all Indian banks (`lib/sms/parse.ts`): amount, payee, date, UPI ref, account digits. Optional AI fallback for unknown formats.
+- Auto-categorises from shop names; detects transfers to your own name and money coming in; skips duplicates by UPI ref.
+- Unknown payees ask once in the notification ("Chai / snacks · Auto / travel · Paid back / lent"); Flow remembers per payee and amount range.
+- "To review" card on Expenses; Profile → Bank SMS: on/off, accounts found (switch each off), learned payees (forget any).
+- Editing an SMS-added expense also teaches Flow that payee.
+- New: `models/PayeeRule.ts`, `/api/sms/ingest|resolve|review|settings`. Expense gains `source`, `smsRef`, `payee`, `account`, `needsReview`.
+
 # Flow update — Recovery codes and admin reset links
 
 - Forgot password now uses a **recovery code** (Profile → Security → Recovery code). Enter email + code + new password; the used code is replaced with a new one. 5 wrong tries lock recovery for 15 minutes.

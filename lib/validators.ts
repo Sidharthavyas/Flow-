@@ -116,3 +116,20 @@ export const budgetSchema = z.object({
   periodStart: dateKey,
   amount: money,
 });
+
+export const smsIngestSchema = z.object({
+  text: z.string().min(10).max(1200),
+  sender: z.string().max(40).default(""),
+  receivedAt: z.number().int().positive().optional(),
+});
+
+export const smsResolveSchema = z.object({
+  expenseId: z.string().regex(/^[a-f0-9]{24}$/),
+  kind: z.enum(["expense", "transfer"]),
+  category: z.string().trim().max(80).optional(),
+});
+
+export const smsAccountSchema = z.object({
+  label: z.string().trim().min(1).max(40),
+  enabled: z.boolean(),
+});
